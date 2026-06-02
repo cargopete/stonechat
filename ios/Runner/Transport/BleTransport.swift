@@ -62,6 +62,14 @@ final class BleTransport: NSObject {
     ensureManagers()
   }
 
+  /// Creates the CB managers (with restore identifiers) without needing the
+  /// Flutter engine. Call from `didFinishLaunchingWithOptions` so iOS can
+  /// relaunch us into the background on a BLE event and deliver
+  /// `willRestoreState`.
+  func prepareForRestoration() {
+    ensureManagers()
+  }
+
   private func ensureManagers() {
     if central == nil {
       central = CBCentralManager(
@@ -129,10 +137,10 @@ final class BleTransport: NSObject {
     }
   }
 
-  /// Stage 2 will write ciphertext to the shared-container SQLite file here so
-  /// Dart reconciles on next launch. Stubbed for the Stage 1 skeleton.
+  /// Background path: drop the envelope into the App Group inbox for Dart to
+  /// drain on next launch/resume.
   private func persistForLater(_ envelope: Data, from peerId: String) {
-    // TODO(stage2): append to shared drift database for Dart to pick up.
+    EnvelopeInbox.write(envelope)
   }
 
   private func fireLocalNotification(from peerId: String) {
@@ -203,6 +211,10 @@ extension BleTransport: TransportHostApi {
 
   func connectedPeers() throws -> [String] {
     Array(Set(remoteCharacteristics.keys).union(subscribedCentrals.keys))
+  }
+
+  func inboxDirectoryPath() throws -> String? {
+    SharedContainer.inboxURL()?.path
   }
 }
 

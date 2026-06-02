@@ -9,11 +9,39 @@ import 'conversation_page.dart';
 String peerLabel(Peer peer) =>
     peer.displayName ?? 'Peer ${peer.id.substring(0, 8)}';
 
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   const HomePage({super.key, required this.service, required this.db});
 
   final ChatService service;
   final AppDatabase db;
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  ChatService get service => widget.service;
+  AppDatabase get db => widget.db;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Reconcile anything the native side received while we were backgrounded.
+      service.drainInbox();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

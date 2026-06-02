@@ -71,6 +71,9 @@ class AppDatabase extends _$AppDatabase {
   Future<void> upsertPeer(PeersCompanion peer) =>
       into(peers).insertOnConflictUpdate(peer);
 
+  Future<Peer?> peerById(String id) =>
+      (select(peers)..where((p) => p.id.equals(id))..limit(1)).getSingleOrNull();
+
   /// Reactive list of known peers, most-recently-seen first.
   Stream<List<Peer>> watchPeers() {
     return (select(peers)

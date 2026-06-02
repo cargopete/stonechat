@@ -540,6 +540,11 @@ protocol TransportHostApi {
   /// an application-layer envelope handled in Dart).
   func sendEnvelope(peerId: String, envelope: FlutterStandardTypedData, completion: @escaping (Result<Bool, Error>) -> Void)
   func connectedPeers() throws -> [String]
+  /// Filesystem path of the App Group shared "inbox" directory where the native
+  /// transport drops inbound envelope files during background wakes (when Dart
+  /// is not running). Dart drains + deletes these on launch/resume. Returns
+  /// null if no shared container is available.
+  func inboxDirectoryPath() throws -> String?
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -683,6 +688,23 @@ class TransportHostApiSetup {
       }
     } else {
       connectedPeersChannel.setMessageHandler(nil)
+    }
+    /// Filesystem path of the App Group shared "inbox" directory where the native
+    /// transport drops inbound envelope files during background wakes (when Dart
+    /// is not running). Dart drains + deletes these on launch/resume. Returns
+    /// null if no shared container is available.
+    let inboxDirectoryPathChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.stonechat.TransportHostApi.inboxDirectoryPath\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      inboxDirectoryPathChannel.setMessageHandler { _, reply in
+        do {
+          let result = try api.inboxDirectoryPath()
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      inboxDirectoryPathChannel.setMessageHandler(nil)
     }
   }
 }

@@ -7,6 +7,9 @@ import UIKit
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    // Create the CB managers before the Flutter engine so iOS can relaunch us
+    // into the background on a BLE event (State Restoration).
+    BleTransport.shared.prepareForRestoration()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 

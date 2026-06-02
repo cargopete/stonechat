@@ -125,6 +125,12 @@ abstract class TransportHostApi {
   bool sendEnvelope(String peerId, Uint8List envelope);
 
   List<String> connectedPeers();
+
+  /// Filesystem path of the App Group shared "inbox" directory where the native
+  /// transport drops inbound envelope files during background wakes (when Dart
+  /// is not running). Dart drains + deletes these on launch/resume. Returns
+  /// null if no shared container is available.
+  String? inboxDirectoryPath();
 }
 
 @EventChannelApi()

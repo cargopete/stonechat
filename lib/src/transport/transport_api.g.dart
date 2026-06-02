@@ -660,6 +660,29 @@ class TransportHostApi {
     ;
     return (pigeonVar_replyValue! as List<Object?>).cast<String>();
   }
+
+  /// Filesystem path of the App Group shared "inbox" directory where the native
+  /// transport drops inbound envelope files during background wakes (when Dart
+  /// is not running). Dart drains + deletes these on launch/resume. Returns
+  /// null if no shared container is available.
+  Future<String?> inboxDirectoryPath() async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.stonechat.TransportHostApi.inboxDirectoryPath$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
+    return pigeonVar_replyValue as String?;
+  }
 }
 
 Stream<TransportEvent> streamTransportEvents( {String instanceName = ''}) {

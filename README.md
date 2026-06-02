@@ -51,10 +51,19 @@ custom native Swift Core Bluetooth transport.
 
 ## Roadmap
 
-- **Stage 1 (this scaffold):** foreground happy path — dual-role transport,
-  Pigeon bridge, signed+boxed envelopes, drift persistence. _Skeleton._
-- **Stage 2:** State Restoration + Swift-side notifications + shared-container DB.
+- **Stage 1 (done):** foreground happy path — dual-role transport, Pigeon
+  bridge, signed+boxed envelopes, drift persistence, Keychain identity, chat UI,
+  ACK + dedup + store-and-forward outbox.
+- **Stage 2 (in progress):** State Restoration (CB managers created in
+  `didFinishLaunching`), Swift-side local notifications, and an App Group shared
+  **inbox** — Swift drops inbound envelope files there on background wakes, Dart
+  drains them into drift on launch/resume. DB stays single-writer (Dart).
 - **Stage 3:** characterise the background delivery matrix on real hardware.
+
+> **App Group:** the shared inbox uses `group.com.stonechat`
+> (`ios/Runner/Runner.entitlements`). Device builds need that capability enabled
+> on the App ID / provisioning profile; without it the code falls back to the
+> app's private container and still runs (only cross-process hand-off is lost).
 
 ## Building
 

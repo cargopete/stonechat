@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
@@ -16,9 +17,10 @@ String hex(Uint8List bytes) =>
 /// Wires the native BLE transport, the crypto layer and the database into the
 /// direct + store-and-forward delivery model (brief §7).
 ///
-/// Scope note: this is the Stage 1 happy path. Outbox flush-on-reconnect and
-/// retry/backoff are left as marked TODOs — the structure is here, the policy
-/// is the next increment.
+/// Foreground: events stream live from the transport. Background (Stage 2):
+/// the native side writes inbound envelopes to an App Group inbox; [drainInbox]
+/// reconciles them into drift on launch/resume, resolving peer keys from the
+/// database since the in-memory caches are empty after a cold restore.
 class ChatService {
   ChatService({required this.db, required this.crypto, TransportHostApi? api})
       : _api = api ?? TransportHostApi();
@@ -69,6 +71,22 @@ class ChatService {
     _sub = streamTransportEvents().listen(_onEvent);
     await _api.startAdvertising();
     await _api.startScanning();
+    await drainInbox();
+  }
+
+  /// Resolves a peer's public keys, falling back from the in-memory cache to
+  /// the `peers` table (the cache is empty after a cold background restore).
+  Future<PeerKeys?> _resolvePeerKeys(String identityHex) async {
+    final cached = _keysByIdentity[identityHex];
+    if (cached != null) return cached;
+    final peer = await db.peerById(identityHex);
+    if (peer == null) return null;
+    final keys = PeerKeys(
+      identityPublicKey: peer.identityPublicKey,
+      boxPublicKey: peer.boxPublicKey,
+    );
+    _keysByIdentity[identityHex] = keys;
+    return keys;
   }
 
   Future<void> dispose() async {
@@ -168,7 +186,7 @@ class ChatService {
   }
 
   Future<void> _onAck(Envelope env, String identityHex) async {
-    final keys = _keysByIdentity[identityHex];
+    final keys = await _resolvePeerKeys(identityHex);
     if (keys == null) return;
     try {
       final referencedId = crypto.open(env, sender: keys);
@@ -180,7 +198,7 @@ class ChatService {
 
   Future<void> _onMessage(
       String connectionId, Envelope env, String identityHex) async {
-    final keys = _keysByIdentity[identityHex];
+    final keys = await _resolvePeerKeys(identityHex);
     if (keys == null) return; // No hello yet. TODO: buffer until handshake.
 
     final messageIdHex = hex(env.messageId);
@@ -210,7 +228,7 @@ class ChatService {
 
   /// ACKs by boxing the original `message_id` back to the sender.
   Future<void> _sendAck(String connectionId, Envelope original) async {
-    final keys = _keysByIdentity[hex(original.senderId)];
+    final keys = await _resolvePeerKeys(hex(original.senderId));
     if (keys == null) return;
     final ack = crypto.seal(
       type: EnvelopeType.ack,
@@ -265,6 +283,80 @@ class ChatService {
       if (dispatched) {
         await db.markState(message.messageId, MessageDeliveryState.sent);
       }
+    }
+  }
+
+  /// Drains the App Group inbox the native side fills during background wakes.
+  /// Each envelope file is decoded, reconciled into drift, then deleted. Safe
+  /// to call repeatedly (on launch and on every foreground resume).
+  Future<void> drainInbox() async {
+    final path = await _api.inboxDirectoryPath();
+    if (path == null) return;
+    final dir = Directory(path);
+    if (!await dir.exists()) return;
+
+    await for (final entity in dir.list()) {
+      if (entity is! File || !entity.path.endsWith('.env')) continue;
+      try {
+        await _ingestRestored(await entity.readAsBytes());
+        await entity.delete();
+      } catch (_) {
+        // Leave the file in place for a later attempt.
+      }
+    }
+  }
+
+  /// Reconciles one envelope that arrived while Dart was asleep. There is no
+  /// live connection, so ACKs aren't sent here — the sender's outbox will
+  /// re-send on reconnect, where dedup drops the duplicate and re-ACKs it.
+  Future<void> _ingestRestored(Uint8List bytes) async {
+    final Envelope env;
+    try {
+      env = Envelope.fromBytes(bytes);
+    } on FormatException {
+      return;
+    }
+    final identityHex = hex(env.senderId);
+
+    switch (env.type) {
+      case EnvelopeType.hello:
+        try {
+          final keys = crypto.openHello(env);
+          _keysByIdentity[identityHex] = keys;
+          await db.upsertPeer(PeersCompanion(
+            id: Value(identityHex),
+            identityPublicKey: Value(keys.identityPublicKey),
+            boxPublicKey: Value(keys.boxPublicKey),
+            lastSeenMs: Value(DateTime.now().millisecondsSinceEpoch),
+          ));
+        } on SignatureVerificationException {
+          // forged — ignore
+        }
+      case EnvelopeType.message:
+        final keys = await _resolvePeerKeys(identityHex);
+        if (keys == null) return;
+        final messageIdHex = hex(env.messageId);
+        if (await db.hasMessage(messageIdHex)) return;
+        try {
+          final plaintext = crypto.open(env, sender: keys);
+          await db.insertMessage(MessagesCompanion(
+            messageId: Value(messageIdHex),
+            peerId: Value(identityHex),
+            direction: Value(MessageDirection.inbound),
+            body: Value(utf8.decode(plaintext)),
+            timestampMs: Value(env.timestampMs),
+            state: Value(MessageDeliveryState.received),
+            createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
+          ));
+        } on SignatureVerificationException {
+          // drop
+        }
+      case EnvelopeType.ack:
+        await _onAck(env, identityHex);
+      case EnvelopeType.fragmentStart:
+      case EnvelopeType.fragmentCont:
+      case EnvelopeType.fragmentEnd:
+        break;
     }
   }
 }
