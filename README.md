@@ -1,8 +1,16 @@
 # stonechat
 
+[![CI](https://github.com/cargopete/stonechat/actions/workflows/ci.yml/badge.svg)](https://github.com/cargopete/stonechat/actions/workflows/ci.yml)
+
 Offline, peer-to-peer, one-to-one chat for iOS. No servers, no internet — just
 two phones talking directly over Bluetooth Low Energy. Flutter UI on top of a
 custom native Swift Core Bluetooth transport.
+
+**Status:** v1.0.0. Foreground messaging (discovery → handshake → encrypted
+message → ACK → dedup, with a store-and-forward outbox) is implemented and
+verified in the simulator + CI. Background delivery (State Restoration + App
+Group inbox) is implemented but **not yet verified on real hardware** — that
+needs two physical iPhones (the simulator has no Bluetooth radio).
 
 ## Architecture
 
@@ -44,21 +52,26 @@ custom native Swift Core Bluetooth transport.
 |---|---|
 | `pigeons/transport.dart` | Bridge contract (regenerate: `dart run pigeon --input pigeons/transport.dart`) |
 | `lib/src/transport/` | Generated Dart API + transport glue |
-| `lib/src/crypto/` | `Envelope` wire format + `EnvelopeCrypto` (sign-then-box) |
+| `lib/src/crypto/` | `Envelope` wire format, `EnvelopeCrypto` (sign-then-box), `IdentityStore` (Keychain) |
 | `lib/src/data/` | drift database (regenerate: `dart run build_runner build`) |
-| `lib/src/chat/` | `ChatService` — discovery → hello → message → ACK → dedup |
-| `ios/Runner/Transport/` | `BleTransport`, fragmenter, event stream handler, generated Swift |
+| `lib/src/chat/` | `ChatService` — discovery → hello → message → ACK → dedup → outbox |
+| `lib/src/ui/` | Home (peer list + presence) and conversation screens |
+| `ios/Runner/Transport/` | `BleTransport`, fragmenter, `EnvelopeInbox` (App Group), event handler, generated Swift |
+| `.github/workflows/ci.yml` | CI: analyze + test (Linux), iOS build (macOS) |
 
 ## Roadmap
 
 - **Stage 1 (done):** foreground happy path — dual-role transport, Pigeon
   bridge, signed+boxed envelopes, drift persistence, Keychain identity, chat UI,
-  ACK + dedup + store-and-forward outbox.
-- **Stage 2 (in progress):** State Restoration (CB managers created in
-  `didFinishLaunching`), Swift-side local notifications, and an App Group shared
-  **inbox** — Swift drops inbound envelope files there on background wakes, Dart
-  drains them into drift on launch/resume. DB stays single-writer (Dart).
-- **Stage 3:** characterise the background delivery matrix on real hardware.
+  ACK + dedup + store-and-forward outbox with exponential retry/backoff.
+- **Stage 2 (done):** State Restoration (CB managers created in
+  `didFinishLaunching`, with `willRestoreState` re-subscription), Swift-side
+  local notifications that name the sender, and an App Group shared **inbox** —
+  Swift drops inbound envelope files there on background wakes, Dart drains them
+  into drift on launch/resume. DB stays single-writer (Dart). _Not yet verified
+  on hardware._
+- **Stage 3:** characterise the background delivery matrix on real hardware
+  (both foreground; one background; one screen-off; both background).
 
 > **App Group:** the shared inbox uses `group.com.stonechat`
 > (`ios/Runner/Runner.entitlements`). Device builds need that capability enabled
@@ -74,7 +87,7 @@ Manager** (no CocoaPods).
 flutter pub get
 dart run pigeon --input pigeons/transport.dart   # regenerate bridge
 dart run build_runner build                       # regenerate drift
-flutter test                                      # envelope codec tests
+flutter test                                      # envelope, database, backoff tests
 flutter run -d <ios-device>
 ```
 
