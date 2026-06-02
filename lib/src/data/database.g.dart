@@ -476,6 +476,17 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _envelopeMeta = const VerificationMeta(
+    'envelope',
+  );
+  @override
+  late final GeneratedColumn<Uint8List> envelope = GeneratedColumn<Uint8List>(
+    'envelope',
+    aliasedName,
+    true,
+    type: DriftSqlType.blob,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     messageId,
@@ -485,6 +496,7 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     timestampMs,
     state,
     createdAtMs,
+    envelope,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -544,6 +556,12 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     } else if (isInserting) {
       context.missing(_createdAtMsMeta);
     }
+    if (data.containsKey('envelope')) {
+      context.handle(
+        _envelopeMeta,
+        envelope.isAcceptableOrUnknown(data['envelope']!, _envelopeMeta),
+      );
+    }
     return context;
   }
 
@@ -585,6 +603,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.int,
         data['${effectivePrefix}created_at_ms'],
       )!,
+      envelope: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}envelope'],
+      ),
     );
   }
 
@@ -609,6 +631,11 @@ class Message extends DataClass implements Insertable<Message> {
   final int timestampMs;
   final MessageDeliveryState state;
   final int createdAtMs;
+
+  /// The sealed envelope bytes for an outbound message, kept so the outbox can
+  /// re-send the *identical* bytes (same message_id) on reconnect — which is
+  /// what preserves dedup + ACK matching. Null for inbound messages.
+  final Uint8List? envelope;
   const Message({
     required this.messageId,
     required this.peerId,
@@ -617,6 +644,7 @@ class Message extends DataClass implements Insertable<Message> {
     required this.timestampMs,
     required this.state,
     required this.createdAtMs,
+    this.envelope,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -634,6 +662,9 @@ class Message extends DataClass implements Insertable<Message> {
       map['state'] = Variable<int>($MessagesTable.$converterstate.toSql(state));
     }
     map['created_at_ms'] = Variable<int>(createdAtMs);
+    if (!nullToAbsent || envelope != null) {
+      map['envelope'] = Variable<Uint8List>(envelope);
+    }
     return map;
   }
 
@@ -646,6 +677,9 @@ class Message extends DataClass implements Insertable<Message> {
       timestampMs: Value(timestampMs),
       state: Value(state),
       createdAtMs: Value(createdAtMs),
+      envelope: envelope == null && nullToAbsent
+          ? const Value.absent()
+          : Value(envelope),
     );
   }
 
@@ -666,6 +700,7 @@ class Message extends DataClass implements Insertable<Message> {
         serializer.fromJson<int>(json['state']),
       ),
       createdAtMs: serializer.fromJson<int>(json['createdAtMs']),
+      envelope: serializer.fromJson<Uint8List?>(json['envelope']),
     );
   }
   @override
@@ -683,6 +718,7 @@ class Message extends DataClass implements Insertable<Message> {
         $MessagesTable.$converterstate.toJson(state),
       ),
       'createdAtMs': serializer.toJson<int>(createdAtMs),
+      'envelope': serializer.toJson<Uint8List?>(envelope),
     };
   }
 
@@ -694,6 +730,7 @@ class Message extends DataClass implements Insertable<Message> {
     int? timestampMs,
     MessageDeliveryState? state,
     int? createdAtMs,
+    Value<Uint8List?> envelope = const Value.absent(),
   }) => Message(
     messageId: messageId ?? this.messageId,
     peerId: peerId ?? this.peerId,
@@ -702,6 +739,7 @@ class Message extends DataClass implements Insertable<Message> {
     timestampMs: timestampMs ?? this.timestampMs,
     state: state ?? this.state,
     createdAtMs: createdAtMs ?? this.createdAtMs,
+    envelope: envelope.present ? envelope.value : this.envelope,
   );
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
@@ -716,6 +754,7 @@ class Message extends DataClass implements Insertable<Message> {
       createdAtMs: data.createdAtMs.present
           ? data.createdAtMs.value
           : this.createdAtMs,
+      envelope: data.envelope.present ? data.envelope.value : this.envelope,
     );
   }
 
@@ -728,7 +767,8 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('body: $body, ')
           ..write('timestampMs: $timestampMs, ')
           ..write('state: $state, ')
-          ..write('createdAtMs: $createdAtMs')
+          ..write('createdAtMs: $createdAtMs, ')
+          ..write('envelope: $envelope')
           ..write(')'))
         .toString();
   }
@@ -742,6 +782,7 @@ class Message extends DataClass implements Insertable<Message> {
     timestampMs,
     state,
     createdAtMs,
+    $driftBlobEquality.hash(envelope),
   );
   @override
   bool operator ==(Object other) =>
@@ -753,7 +794,8 @@ class Message extends DataClass implements Insertable<Message> {
           other.body == this.body &&
           other.timestampMs == this.timestampMs &&
           other.state == this.state &&
-          other.createdAtMs == this.createdAtMs);
+          other.createdAtMs == this.createdAtMs &&
+          $driftBlobEquality.equals(other.envelope, this.envelope));
 }
 
 class MessagesCompanion extends UpdateCompanion<Message> {
@@ -764,6 +806,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<int> timestampMs;
   final Value<MessageDeliveryState> state;
   final Value<int> createdAtMs;
+  final Value<Uint8List?> envelope;
   final Value<int> rowid;
   const MessagesCompanion({
     this.messageId = const Value.absent(),
@@ -773,6 +816,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.timestampMs = const Value.absent(),
     this.state = const Value.absent(),
     this.createdAtMs = const Value.absent(),
+    this.envelope = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessagesCompanion.insert({
@@ -783,6 +827,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     required int timestampMs,
     required MessageDeliveryState state,
     required int createdAtMs,
+    this.envelope = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : messageId = Value(messageId),
        peerId = Value(peerId),
@@ -799,6 +844,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<int>? timestampMs,
     Expression<int>? state,
     Expression<int>? createdAtMs,
+    Expression<Uint8List>? envelope,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -809,6 +855,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (timestampMs != null) 'timestamp_ms': timestampMs,
       if (state != null) 'state': state,
       if (createdAtMs != null) 'created_at_ms': createdAtMs,
+      if (envelope != null) 'envelope': envelope,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -821,6 +868,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<int>? timestampMs,
     Value<MessageDeliveryState>? state,
     Value<int>? createdAtMs,
+    Value<Uint8List?>? envelope,
     Value<int>? rowid,
   }) {
     return MessagesCompanion(
@@ -831,6 +879,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       timestampMs: timestampMs ?? this.timestampMs,
       state: state ?? this.state,
       createdAtMs: createdAtMs ?? this.createdAtMs,
+      envelope: envelope ?? this.envelope,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -863,6 +912,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (createdAtMs.present) {
       map['created_at_ms'] = Variable<int>(createdAtMs.value);
     }
+    if (envelope.present) {
+      map['envelope'] = Variable<Uint8List>(envelope.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -879,6 +931,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('timestampMs: $timestampMs, ')
           ..write('state: $state, ')
           ..write('createdAtMs: $createdAtMs, ')
+          ..write('envelope: $envelope, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1205,6 +1258,7 @@ typedef $$MessagesTableCreateCompanionBuilder =
       required int timestampMs,
       required MessageDeliveryState state,
       required int createdAtMs,
+      Value<Uint8List?> envelope,
       Value<int> rowid,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
@@ -1216,6 +1270,7 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int> timestampMs,
       Value<MessageDeliveryState> state,
       Value<int> createdAtMs,
+      Value<Uint8List?> envelope,
       Value<int> rowid,
     });
 
@@ -1287,6 +1342,11 @@ class $$MessagesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<Uint8List> get envelope => $composableBuilder(
+    column: $table.envelope,
+    builder: (column) => ColumnFilters(column),
+  );
+
   $$PeersTableFilterComposer get peerId {
     final $$PeersTableFilterComposer composer = $composerBuilder(
       composer: this,
@@ -1350,6 +1410,11 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<Uint8List> get envelope => $composableBuilder(
+    column: $table.envelope,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$PeersTableOrderingComposer get peerId {
     final $$PeersTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -1404,6 +1469,9 @@ class $$MessagesTableAnnotationComposer
     column: $table.createdAtMs,
     builder: (column) => column,
   );
+
+  GeneratedColumn<Uint8List> get envelope =>
+      $composableBuilder(column: $table.envelope, builder: (column) => column);
 
   $$PeersTableAnnotationComposer get peerId {
     final $$PeersTableAnnotationComposer composer = $composerBuilder(
@@ -1464,6 +1532,7 @@ class $$MessagesTableTableManager
                 Value<int> timestampMs = const Value.absent(),
                 Value<MessageDeliveryState> state = const Value.absent(),
                 Value<int> createdAtMs = const Value.absent(),
+                Value<Uint8List?> envelope = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion(
                 messageId: messageId,
@@ -1473,6 +1542,7 @@ class $$MessagesTableTableManager
                 timestampMs: timestampMs,
                 state: state,
                 createdAtMs: createdAtMs,
+                envelope: envelope,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1484,6 +1554,7 @@ class $$MessagesTableTableManager
                 required int timestampMs,
                 required MessageDeliveryState state,
                 required int createdAtMs,
+                Value<Uint8List?> envelope = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion.insert(
                 messageId: messageId,
@@ -1493,6 +1564,7 @@ class $$MessagesTableTableManager
                 timestampMs: timestampMs,
                 state: state,
                 createdAtMs: createdAtMs,
+                envelope: envelope,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

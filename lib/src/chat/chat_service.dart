@@ -158,6 +158,10 @@ class ChatService {
         lastSeenMs: Value(DateTime.now().millisecondsSinceEpoch),
       ));
       _setOnline(identityHex, true);
+      final connectionId = _connectionByIdentity[identityHex];
+      if (connectionId != null) {
+        await _flushOutbox(identityHex, connectionId);
+      }
     } on SignatureVerificationException {
       // Forged hello — ignore.
     }
@@ -239,6 +243,7 @@ class ChatService {
       timestampMs: Value(env.timestampMs),
       state: Value(MessageDeliveryState.queued),
       createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
+      envelope: Value(env.toBytes()),
     ));
 
     final dispatched = await _api.sendEnvelope(connectionId, env.toBytes());
@@ -246,5 +251,20 @@ class ChatService {
       messageIdHex,
       dispatched ? MessageDeliveryState.sent : MessageDeliveryState.failed,
     );
+  }
+
+  /// Store-and-forward: re-send every un-acked outbound message to a peer that
+  /// just (re)connected, using the stored envelope bytes so the message_id —
+  /// and therefore dedup + ACK matching — is preserved.
+  Future<void> _flushOutbox(String identityHex, String connectionId) async {
+    final pending = await db.pendingFor(identityHex);
+    for (final message in pending) {
+      final bytes = message.envelope;
+      if (bytes == null) continue; // inbound or pre-envelope row; skip.
+      final dispatched = await _api.sendEnvelope(connectionId, bytes);
+      if (dispatched) {
+        await db.markState(message.messageId, MessageDeliveryState.sent);
+      }
+    }
   }
 }

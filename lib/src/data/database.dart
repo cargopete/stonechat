@@ -42,6 +42,11 @@ class Messages extends Table {
   IntColumn get state => intEnum<MessageDeliveryState>()();
   IntColumn get createdAtMs => integer()();
 
+  /// The sealed envelope bytes for an outbound message, kept so the outbox can
+  /// re-send the *identical* bytes (same message_id) on reconnect — which is
+  /// what preserves dedup + ACK matching. Null for inbound messages.
+  BlobColumn get envelope => blob().nullable()();
+
   @override
   Set<Column> get primaryKey => {messageId};
 }
@@ -51,7 +56,17 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) => m.createAll(),
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            await m.addColumn(messages, messages.envelope);
+          }
+        },
+      );
 
   Future<void> upsertPeer(PeersCompanion peer) =>
       into(peers).insertOnConflictUpdate(peer);
@@ -88,11 +103,12 @@ class AppDatabase extends _$AppDatabase {
   }
 
   /// Inserts a message, ignoring duplicates (dedup by [messageId]).
-  /// Returns true if it was new.
+  /// Returns true if it was new. The existence check makes the result
+  /// deterministic; `insertOrIgnore` still guards the row at the DB level.
   Future<bool> insertMessage(MessagesCompanion message) async {
-    final inserted = await into(messages)
-        .insert(message, mode: InsertMode.insertOrIgnore);
-    return inserted != 0;
+    if (await hasMessage(message.messageId.value)) return false;
+    await into(messages).insert(message, mode: InsertMode.insertOrIgnore);
+    return true;
   }
 
   Future<void> markState(String messageId, MessageDeliveryState state) {
