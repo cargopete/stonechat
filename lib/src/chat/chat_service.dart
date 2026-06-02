@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show Value;
+import 'package:flutter/foundation.dart';
 
 import '../crypto/envelope.dart';
 import '../crypto/identity.dart';
@@ -41,6 +41,14 @@ class ChatService {
   /// Raw transport events, re-broadcast for the UI (peer discovery, RSSI, etc).
   Stream<TransportEvent> get events => _events.stream;
 
+  /// Latest Bluetooth adapter state, for the UI status banner.
+  final ValueNotifier<BleAdapterState> adapterState =
+      ValueNotifier<BleAdapterState>(BleAdapterState.unknown);
+
+  /// Identity hexes of peers currently connected *and* handshaked (reachable).
+  final ValueNotifier<Set<String>> onlineIdentities =
+      ValueNotifier<Set<String>>(const {});
+
   StreamSubscription<TransportEvent>? _sub;
 
   // The transport addresses peers by connection id (CBPeripheral/CBCentral
@@ -66,21 +74,44 @@ class ChatService {
   Future<void> dispose() async {
     await _sub?.cancel();
     await _events.close();
+    adapterState.dispose();
+    onlineIdentities.dispose();
   }
 
   void _onEvent(TransportEvent event) {
     _events.add(event);
     switch (event) {
+      case AdapterStateEvent(:final state):
+        adapterState.value = state;
       case PeerDiscoveredEvent(:final peer):
         unawaited(_api.connect(peer.peerId));
       case PeerConnectionEvent(:final peerId, :final state):
-        if (state == PeerConnectionState.connected) {
-          unawaited(_sendHello(peerId));
+        switch (state) {
+          case PeerConnectionState.connected:
+            unawaited(_sendHello(peerId));
+          case PeerConnectionState.disconnected:
+            _onDisconnected(peerId);
+          case PeerConnectionState.connecting:
+          case PeerConnectionState.disconnecting:
+            break;
         }
       case EnvelopeReceivedEvent(:final peerId, :final envelope):
         unawaited(_onEnvelope(peerId, envelope));
-      case AdapterStateEvent():
-        break;
+    }
+  }
+
+  void _onDisconnected(String connectionId) {
+    final identityHex = _identityByConnection.remove(connectionId);
+    if (identityHex != null) {
+      _connectionByIdentity.remove(identityHex);
+      _setOnline(identityHex, false);
+    }
+  }
+
+  void _setOnline(String identityHex, bool online) {
+    final next = Set<String>.from(onlineIdentities.value);
+    if (online ? next.add(identityHex) : next.remove(identityHex)) {
+      onlineIdentities.value = next;
     }
   }
 
@@ -126,6 +157,7 @@ class ChatService {
         boxPublicKey: Value(keys.boxPublicKey),
         lastSeenMs: Value(DateTime.now().millisecondsSinceEpoch),
       ));
+      _setOnline(identityHex, true);
     } on SignatureVerificationException {
       // Forged hello — ignore.
     }

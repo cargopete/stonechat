@@ -56,6 +56,18 @@ class AppDatabase extends _$AppDatabase {
   Future<void> upsertPeer(PeersCompanion peer) =>
       into(peers).insertOnConflictUpdate(peer);
 
+  /// Reactive list of known peers, most-recently-seen first.
+  Stream<List<Peer>> watchPeers() {
+    return (select(peers)
+          ..orderBy([
+            (p) => OrderingTerm(
+                  expression: p.lastSeenMs,
+                  mode: OrderingMode.desc,
+                ),
+          ]))
+        .watch();
+  }
+
   /// Reactive conversation view, oldest first (timestamp, then id tie-break).
   Stream<List<Message>> watchConversation(String peerId) {
     return (select(messages)

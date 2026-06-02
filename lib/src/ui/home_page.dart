@@ -1,0 +1,141 @@
+import 'package:flutter/material.dart';
+
+import '../chat/chat_service.dart';
+import '../data/database.dart';
+import '../transport/transport_api.g.dart';
+import 'conversation_page.dart';
+
+/// A short, human-ish label for a peer identity (hex) when it has no name.
+String peerLabel(Peer peer) =>
+    peer.displayName ?? 'Peer ${peer.id.substring(0, 8)}';
+
+class HomePage extends StatelessWidget {
+  const HomePage({super.key, required this.service, required this.db});
+
+  final ChatService service;
+  final AppDatabase db;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('stonechat')),
+      body: Column(
+        children: [
+          _AdapterBanner(service: service),
+          Expanded(
+            child: StreamBuilder<List<Peer>>(
+              stream: db.watchPeers(),
+              builder: (context, snapshot) {
+                final peers = snapshot.data ?? const [];
+                if (peers.isEmpty) {
+                  return const _EmptyState();
+                }
+                return ValueListenableBuilder<Set<String>>(
+                  valueListenable: service.onlineIdentities,
+                  builder: (context, online, _) {
+                    return ListView.separated(
+                      itemCount: peers.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, i) {
+                        final peer = peers[i];
+                        final isOnline = online.contains(peer.id);
+                        return ListTile(
+                          leading: _PresenceDot(online: isOnline),
+                          title: Text(peerLabel(peer)),
+                          subtitle: Text(
+                            peer.id.substring(0, 16),
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                            ),
+                          ),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => ConversationPage(
+                                service: service,
+                                db: db,
+                                peer: peer,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdapterBanner extends StatelessWidget {
+  const _AdapterBanner({required this.service});
+
+  final ChatService service;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<BleAdapterState>(
+      valueListenable: service.adapterState,
+      builder: (context, state, _) {
+        final (text, color) = switch (state) {
+          BleAdapterState.poweredOn => ('Scanning for nearby devices…', Colors.teal),
+          BleAdapterState.poweredOff => ('Bluetooth is off', Colors.red),
+          BleAdapterState.unauthorized => ('Bluetooth permission denied', Colors.red),
+          BleAdapterState.unsupported => ('Bluetooth not supported', Colors.red),
+          _ => ('Starting Bluetooth…', Colors.orange),
+        };
+        return Container(
+          width: double.infinity,
+          color: color.withValues(alpha: 0.12),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              Icon(Icons.bluetooth, size: 18, color: color),
+              const SizedBox(width: 8),
+              Text(text, style: TextStyle(color: color)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PresenceDot extends StatelessWidget {
+  const _PresenceDot({required this.online});
+
+  final bool online;
+
+  @override
+  Widget build(BuildContext context) {
+    return Icon(
+      Icons.circle,
+      size: 14,
+      color: online ? Colors.green : Colors.grey,
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(32),
+        child: Text(
+          'No peers yet.\n\nBring another stonechat device nearby, '
+          'in the foreground, to exchange a hello.',
+          textAlign: TextAlign.center,
+        ),
+      ),
+    );
+  }
+}

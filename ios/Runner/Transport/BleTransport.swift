@@ -57,6 +57,8 @@ final class BleTransport: NSObject {
   func attach(messenger: FlutterBinaryMessenger) {
     TransportHostApiSetup.setUp(binaryMessenger: messenger, api: self)
     StreamTransportEventsStreamHandler.register(with: messenger, streamHandler: events)
+    UNUserNotificationCenter.current()
+      .requestAuthorization(options: [.alert, .sound]) { _, _ in }
     ensureManagers()
   }
 
