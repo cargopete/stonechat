@@ -131,6 +131,11 @@ abstract class TransportHostApi {
   /// is not running). Dart drains + deletes these on launch/resume. Returns
   /// null if no shared container is available.
   String? inboxDirectoryPath();
+
+  /// Caches a human label for a peer identity (Ed25519 public key, hex) so the
+  /// native side can name the sender in background local notifications, when
+  /// Dart isn't running to do it. Persisted in the App Group UserDefaults.
+  void cachePeerName(String identityHex, String name);
 }
 
 @EventChannelApi()

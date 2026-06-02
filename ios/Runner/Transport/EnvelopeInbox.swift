@@ -46,3 +46,21 @@ enum EnvelopeInbox {
     try? envelope.write(to: file, options: .atomic)
   }
 }
+
+/// Maps a peer identity (Ed25519 public key, hex) to a human label, persisted
+/// in the App Group UserDefaults so background notifications can name senders.
+enum PeerNameCache {
+  private static var defaults: UserDefaults {
+    UserDefaults(suiteName: SharedContainer.appGroupId) ?? .standard
+  }
+
+  private static func key(_ identityHex: String) -> String { "peername.\(identityHex)" }
+
+  static func set(_ name: String, for identityHex: String) {
+    defaults.set(name, forKey: key(identityHex))
+  }
+
+  static func name(for identityHex: String) -> String? {
+    defaults.string(forKey: key(identityHex))
+  }
+}

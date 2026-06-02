@@ -545,6 +545,10 @@ protocol TransportHostApi {
   /// is not running). Dart drains + deletes these on launch/resume. Returns
   /// null if no shared container is available.
   func inboxDirectoryPath() throws -> String?
+  /// Caches a human label for a peer identity (Ed25519 public key, hex) so the
+  /// native side can name the sender in background local notifications, when
+  /// Dart isn't running to do it. Persisted in the App Group UserDefaults.
+  func cachePeerName(identityHex: String, name: String) throws
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -705,6 +709,25 @@ class TransportHostApiSetup {
       }
     } else {
       inboxDirectoryPathChannel.setMessageHandler(nil)
+    }
+    /// Caches a human label for a peer identity (Ed25519 public key, hex) so the
+    /// native side can name the sender in background local notifications, when
+    /// Dart isn't running to do it. Persisted in the App Group UserDefaults.
+    let cachePeerNameChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.stonechat.TransportHostApi.cachePeerName\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      cachePeerNameChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let identityHexArg = args[0] as! String
+        let nameArg = args[1] as! String
+        do {
+          try api.cachePeerName(identityHex: identityHexArg, name: nameArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      cachePeerNameChannel.setMessageHandler(nil)
     }
   }
 }

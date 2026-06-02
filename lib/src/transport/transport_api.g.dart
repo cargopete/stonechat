@@ -683,6 +683,27 @@ class TransportHostApi {
     ;
     return pigeonVar_replyValue as String?;
   }
+
+  /// Caches a human label for a peer identity (Ed25519 public key, hex) so the
+  /// native side can name the sender in background local notifications, when
+  /// Dart isn't running to do it. Persisted in the App Group UserDefaults.
+  Future<void> cachePeerName(String identityHex, String name) async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.stonechat.TransportHostApi.cachePeerName$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[identityHex, name]);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    _extractReplyValueOrThrow(
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
+  }
 }
 
 Stream<TransportEvent> streamTransportEvents( {String instanceName = ''}) {

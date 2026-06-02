@@ -14,6 +14,16 @@ import '../transport/transport_api.g.dart';
 String hex(Uint8List bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
+/// Exponential outbox retry backoff: 2s, 4s, 8s … capped at 5 minutes.
+/// Pure function, kept top-level so it can be unit-tested without a transport.
+Duration outboxBackoff(int attempts) {
+  const baseMs = 2000;
+  const capMs = 5 * 60 * 1000;
+  final shift = attempts.clamp(0, 20);
+  final ms = baseMs * (1 << shift);
+  return Duration(milliseconds: ms > capMs ? capMs : ms);
+}
+
 /// Wires the native BLE transport, the crypto layer and the database into the
 /// direct + store-and-forward delivery model (brief §7).
 ///
@@ -60,6 +70,14 @@ class ChatService {
   final Map<String, String> _connectionByIdentity = {};
   final Map<String, PeerKeys> _keysByIdentity = {};
 
+  // Per-message outbox retry state (in-memory; a cold restart simply flushes
+  // everything afresh on the next connection).
+  static const int _maxOutboxAttempts = 10;
+  static const Duration _retryInterval = Duration(seconds: 15);
+  final Map<String, int> _attempts = {};
+  final Map<String, DateTime> _lastAttempt = {};
+  Timer? _retryTimer;
+
   Future<void> start({required String displayName}) async {
     await _api.configure(TransportConfig(
       serviceUuid: serviceUuid,
@@ -69,6 +87,7 @@ class ChatService {
       peripheralRestoreIdentifier: _peripheralRestoreId,
     ));
     _sub = streamTransportEvents().listen(_onEvent);
+    _retryTimer = Timer.periodic(_retryInterval, (_) => unawaited(_retryOutbox()));
     await _api.startAdvertising();
     await _api.startScanning();
     await drainInbox();
@@ -90,6 +109,7 @@ class ChatService {
   }
 
   Future<void> dispose() async {
+    _retryTimer?.cancel();
     await _sub?.cancel();
     await _events.close();
     adapterState.dispose();
@@ -175,22 +195,28 @@ class ChatService {
         boxPublicKey: Value(keys.boxPublicKey),
         lastSeenMs: Value(DateTime.now().millisecondsSinceEpoch),
       ));
+      unawaited(_api.cachePeerName(identityHex, _labelFor(identityHex)));
       _setOnline(identityHex, true);
       final connectionId = _connectionByIdentity[identityHex];
       if (connectionId != null) {
-        await _flushOutbox(identityHex, connectionId);
+        await _flushOutbox(identityHex, connectionId, respectBackoff: false);
       }
     } on SignatureVerificationException {
       // Forged hello — ignore.
     }
   }
 
+  /// Short human label for a peer (until peers gain user-set display names).
+  String _labelFor(String identityHex) => 'Peer ${identityHex.substring(0, 8)}';
+
   Future<void> _onAck(Envelope env, String identityHex) async {
     final keys = await _resolvePeerKeys(identityHex);
     if (keys == null) return;
     try {
       final referencedId = crypto.open(env, sender: keys);
-      await db.markState(hex(referencedId), MessageDeliveryState.acked);
+      final referencedHex = hex(referencedId);
+      await db.markState(referencedHex, MessageDeliveryState.acked);
+      _clearBackoff(referencedHex); // delivered — stop retrying.
     } on SignatureVerificationException {
       // ignore
     }
@@ -271,19 +297,61 @@ class ChatService {
     );
   }
 
-  /// Store-and-forward: re-send every un-acked outbound message to a peer that
-  /// just (re)connected, using the stored envelope bytes so the message_id —
-  /// and therefore dedup + ACK matching — is preserved.
-  Future<void> _flushOutbox(String identityHex, String connectionId) async {
+  /// Periodic retry: re-flush the outbox to every online peer, honouring each
+  /// message's exponential backoff so we don't hammer the link.
+  Future<void> _retryOutbox() async {
+    for (final identityHex in onlineIdentities.value) {
+      final connectionId = _connectionByIdentity[identityHex];
+      if (connectionId != null) {
+        await _flushOutbox(identityHex, connectionId);
+      }
+    }
+  }
+
+  /// Store-and-forward: re-send un-acked outbound messages to a peer, using the
+  /// stored envelope bytes so the message_id — and therefore dedup + ACK
+  /// matching — is preserved. With [respectBackoff] (the periodic path) each
+  /// message waits out its [outboxBackoff]; on reconnect we flush immediately
+  /// and reset counters.
+  Future<void> _flushOutbox(
+    String identityHex,
+    String connectionId, {
+    bool respectBackoff = true,
+  }) async {
     final pending = await db.pendingFor(identityHex);
+    final now = DateTime.now();
     for (final message in pending) {
       final bytes = message.envelope;
       if (bytes == null) continue; // inbound or pre-envelope row; skip.
+
+      final attempts = _attempts[message.messageId] ?? 0;
+      if (respectBackoff) {
+        if (attempts >= _maxOutboxAttempts) {
+          await db.markState(message.messageId, MessageDeliveryState.failed);
+          _clearBackoff(message.messageId);
+          continue;
+        }
+        final last = _lastAttempt[message.messageId];
+        if (last != null && now.difference(last) < outboxBackoff(attempts)) {
+          continue; // not due yet.
+        }
+      } else {
+        _clearBackoff(message.messageId); // fresh start on reconnect.
+      }
+
       final dispatched = await _api.sendEnvelope(connectionId, bytes);
       if (dispatched) {
         await db.markState(message.messageId, MessageDeliveryState.sent);
       }
+      // Track the attempt either way; backoff grows until an ACK arrives.
+      _attempts[message.messageId] = (_attempts[message.messageId] ?? 0) + 1;
+      _lastAttempt[message.messageId] = now;
     }
+  }
+
+  void _clearBackoff(String messageId) {
+    _attempts.remove(messageId);
+    _lastAttempt.remove(messageId);
   }
 
   /// Drains the App Group inbox the native side fills during background wakes.
@@ -329,6 +397,7 @@ class ChatService {
             boxPublicKey: Value(keys.boxPublicKey),
             lastSeenMs: Value(DateTime.now().millisecondsSinceEpoch),
           ));
+          unawaited(_api.cachePeerName(identityHex, _labelFor(identityHex)));
         } on SignatureVerificationException {
           // forged — ignore
         }

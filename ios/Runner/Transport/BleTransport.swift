@@ -133,7 +133,7 @@ final class BleTransport: NSObject {
       events.emit(event)
     } else {
       persistForLater(envelope, from: peerId)
-      fireLocalNotification(from: peerId)
+      fireLocalNotification(for: envelope)
     }
   }
 
@@ -143,14 +143,26 @@ final class BleTransport: NSObject {
     EnvelopeInbox.write(envelope)
   }
 
-  private func fireLocalNotification(from peerId: String) {
+  private func fireLocalNotification(for envelope: Data) {
     let content = UNMutableNotificationContent()
-    content.title = "New message"
-    content.body = "You have a new message."
+    content.title = senderName(from: envelope)
+    content.body = "New message"
     content.sound = .default
     let request = UNNotificationRequest(
       identifier: UUID().uuidString, content: content, trigger: nil)
     UNUserNotificationCenter.current().add(request)
+  }
+
+  /// Best-effort sender label from the cleartext envelope header. Layout:
+  /// version(1) + type(1) + messageId(16) + senderId(32) + …, so `senderId`
+  /// is the 32 bytes at offset 18 — readable without decryption.
+  private func senderName(from envelope: Data) -> String {
+    let start = 18
+    let length = 32
+    guard envelope.count >= start + length else { return "New message" }
+    let senderId = envelope.subdata(in: start..<(start + length))
+    let hex = senderId.map { String(format: "%02x", $0) }.joined()
+    return PeerNameCache.name(for: hex) ?? "Peer \(hex.prefix(8))"
   }
 }
 
@@ -216,6 +228,10 @@ extension BleTransport: TransportHostApi {
   func inboxDirectoryPath() throws -> String? {
     SharedContainer.inboxURL()?.path
   }
+
+  func cachePeerName(identityHex: String, name: String) throws {
+    PeerNameCache.set(name, for: identityHex)
+  }
 }
 
 // MARK: - Helpers
@@ -242,6 +258,9 @@ extension BleTransport {
 
   private func publishGattService() {
     guard let pm = peripheralManager, pm.state == .poweredOn else { return }
+    // If State Restoration already handed us back the characteristic, keep it —
+    // re-adding would discard the restored service the system republished.
+    if localCharacteristic != nil { return }
     let characteristic = CBMutableCharacteristic(
       type: BleConstants.characteristicUUID,
       properties: [.write, .writeWithoutResponse, .notify],
@@ -285,8 +304,14 @@ extension BleTransport: CBCentralManagerDelegate {
       for peripheral in restored {
         peripheral.delegate = self
         peripherals[peripheral.identifier.uuidString] = peripheral
+        // Re-drive the discovery → characteristic → subscribe chain so an
+        // already-connected restored peripheral resumes delivering notifies.
+        if peripheral.state == .connected {
+          peripheral.discoverServices([BleConstants.serviceUUID])
+        }
       }
     }
+    wantsScanning = true
   }
 
   func centralManager(
@@ -356,8 +381,21 @@ extension BleTransport: CBPeripheralManagerDelegate {
   }
 
   func peripheralManager(_ peripheral: CBPeripheralManager, willRestoreState dict: [String: Any]) {
-    // Services are re-added on `peripheralManagerDidUpdateState`; nothing to
-    // restore eagerly for the skeleton.
+    // Recover the characteristic the system republished, so `publishGattService`
+    // doesn't clobber it and notifies keep flowing to subscribed centrals.
+    if let services =
+      dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService]
+    {
+      for service in services where service.uuid == BleConstants.serviceUUID {
+        let restored = service.characteristics?.compactMap { $0 as? CBMutableCharacteristic }
+        if let characteristic = restored?.first(where: {
+          $0.uuid == BleConstants.characteristicUUID
+        }) {
+          localCharacteristic = characteristic
+        }
+      }
+    }
+    wantsAdvertising = true
   }
 
   func peripheralManager(
