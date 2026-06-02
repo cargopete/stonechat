@@ -1,0 +1,397 @@
+import CoreBluetooth
+import Flutter
+import Foundation
+import UserNotifications
+
+/// Fixed app-level identifiers. These are compile-time constants (not supplied
+/// by Dart at runtime) precisely because State Restoration requires the CB
+/// managers to be created during `didFinishLaunching` — before the Flutter
+/// engine, and thus before any Dart-supplied config, exists. `TransportConfig`
+/// from Dart still carries them so the Dart layer can reason about them, but
+/// Swift is the source of truth.
+enum BleConstants {
+  /// Custom 128-bit GATT service UUID. Generate your own for a real deployment.
+  static let serviceUUID = CBUUID(string: "9F2A1C00-5B3E-4D7A-8C21-7E0B6A4F1D90")
+  /// Single bidirectional write + notify characteristic.
+  static let characteristicUUID = CBUUID(string: "9F2A1C01-5B3E-4D7A-8C21-7E0B6A4F1D90")
+  static let centralRestoreId = "com.stonechat.transport.central"
+  static let peripheralRestoreId = "com.stonechat.transport.peripheral"
+}
+
+/// Dual-role Core Bluetooth transport: every device runs *both* a
+/// `CBPeripheralManager` (advertises the service, exposes one write/notify
+/// characteristic) and a `CBCentralManager` (scans, connects, subscribes), so
+/// whichever device is awake/foreground can drive the exchange. Implements the
+/// Pigeon `TransportHostApi`.
+final class BleTransport: NSObject {
+  static let shared = BleTransport()
+
+  private let events = TransportEventStreamHandler()
+  private let reassembler = FragmentReassembler()
+
+  private var central: CBCentralManager?
+  private var peripheralManager: CBPeripheralManager?
+
+  private var displayName = "stonechat"
+
+  // Peripheral (GATT server) side.
+  private var localCharacteristic: CBMutableCharacteristic?
+  private var subscribedCentrals: [String: CBCentral] = [:]
+  private var wantsAdvertising = false
+  /// Frames that `updateValue` refused (queue full); flushed on
+  /// `peripheralManagerIsReady(toUpdateSubscribers:)`.
+  private var pendingNotifications: [Data] = []
+
+  // Central (GATT client) side.
+  private var peripherals: [String: CBPeripheral] = [:]
+  private var remoteCharacteristics: [String: CBCharacteristic] = [:]
+  private var wantsScanning = false
+
+  private override init() { super.init() }
+
+  // MARK: - Wiring
+
+  /// Called from `AppDelegate` at launch. Registers the Pigeon APIs and creates
+  /// both managers with restore identifiers so iOS can relaunch us on a BLE
+  /// event. Safe to call once.
+  func attach(messenger: FlutterBinaryMessenger) {
+    TransportHostApiSetup.setUp(binaryMessenger: messenger, api: self)
+    StreamTransportEventsStreamHandler.register(with: messenger, streamHandler: events)
+    ensureManagers()
+  }
+
+  private func ensureManagers() {
+    if central == nil {
+      central = CBCentralManager(
+        delegate: self,
+        queue: nil,
+        options: [CBCentralManagerOptionRestoreIdentifierKey: BleConstants.centralRestoreId]
+      )
+    }
+    if peripheralManager == nil {
+      peripheralManager = CBPeripheralManager(
+        delegate: self,
+        queue: nil,
+        options: [CBPeripheralManagerOptionRestoreIdentifierKey: BleConstants.peripheralRestoreId]
+      )
+    }
+  }
+
+  // MARK: - Sending
+
+  /// Splits [data] and writes it to the peer, whether they're connected to us
+  /// as a peripheral (we notify) or we connected to them as a central (we
+  /// write). Returns true if at least the first frame was dispatched.
+  private func send(_ data: Data, to peerId: String) -> Bool {
+    let messageId = Self.uuidBytes(UUID())
+
+    if let peripheral = peripherals[peerId], let characteristic = remoteCharacteristics[peerId] {
+      let maxLen = peripheral.maximumWriteValueLength(for: .withoutResponse)
+      let frames = TransportFragmenter.split(data, messageId: messageId, maxFrameSize: maxLen)
+      for frame in frames {
+        peripheral.writeValue(frame, for: characteristic, type: .withoutResponse)
+      }
+      return true
+    }
+
+    if let central = subscribedCentrals[peerId], let characteristic = localCharacteristic {
+      let maxLen = central.maximumUpdateValueLength
+      let frames = TransportFragmenter.split(data, messageId: messageId, maxFrameSize: maxLen)
+      for frame in frames {
+        let ok = peripheralManager?.updateValue(
+          frame, for: characteristic, onSubscribedCentrals: [central]) ?? false
+        if !ok { pendingNotifications.append(frame) }
+      }
+      return true
+    }
+
+    return false
+  }
+
+  // MARK: - Inbound
+
+  /// Handles a fully reassembled envelope from [peerId]. Emits to Dart when the
+  /// UI is listening; otherwise persists + fires a local notification (the
+  /// background State-Restoration path where Dart is not running).
+  private func handleInbound(_ envelope: Data, from peerId: String) {
+    let event = EnvelopeReceivedEvent(
+      peerId: peerId,
+      envelope: FlutterStandardTypedData(bytes: envelope),
+      receivedAtMs: Int64(Date().timeIntervalSince1970 * 1000)
+    )
+    if events.hasListener {
+      events.emit(event)
+    } else {
+      persistForLater(envelope, from: peerId)
+      fireLocalNotification(from: peerId)
+    }
+  }
+
+  /// Stage 2 will write ciphertext to the shared-container SQLite file here so
+  /// Dart reconciles on next launch. Stubbed for the Stage 1 skeleton.
+  private func persistForLater(_ envelope: Data, from peerId: String) {
+    // TODO(stage2): append to shared drift database for Dart to pick up.
+  }
+
+  private func fireLocalNotification(from peerId: String) {
+    let content = UNMutableNotificationContent()
+    content.title = "New message"
+    content.body = "You have a new message."
+    content.sound = .default
+    let request = UNNotificationRequest(
+      identifier: UUID().uuidString, content: content, trigger: nil)
+    UNUserNotificationCenter.current().add(request)
+  }
+}
+
+// MARK: - TransportHostApi
+
+extension BleTransport: TransportHostApi {
+  func configure(config: TransportConfig, completion: @escaping (Result<Void, Error>) -> Void) {
+    displayName = config.displayName
+    ensureManagers()
+    completion(.success(()))
+  }
+
+  func startAdvertising() throws {
+    wantsAdvertising = true
+    startAdvertisingIfReady()
+  }
+
+  func stopAdvertising() throws {
+    wantsAdvertising = false
+    peripheralManager?.stopAdvertising()
+  }
+
+  func startScanning() throws {
+    wantsScanning = true
+    startScanningIfReady()
+  }
+
+  func stopScanning() throws {
+    wantsScanning = false
+    central?.stopScan()
+  }
+
+  func connect(peerId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    guard let peripheral = peripherals[peerId] else {
+      completion(.failure(PigeonError(code: "unknown_peer", message: "No such peer \(peerId)", details: nil)))
+      return
+    }
+    central?.connect(peripheral, options: [
+      CBConnectPeripheralOptionNotifyOnConnectionKey: true,
+      CBConnectPeripheralOptionNotifyOnDisconnectionKey: true,
+      CBConnectPeripheralOptionNotifyOnNotificationKey: true,
+    ])
+    completion(.success(()))
+  }
+
+  func disconnect(peerId: String) throws {
+    if let peripheral = peripherals[peerId] {
+      central?.cancelPeripheralConnection(peripheral)
+    }
+  }
+
+  func sendEnvelope(
+    peerId: String, envelope: FlutterStandardTypedData,
+    completion: @escaping (Result<Bool, Error>) -> Void
+  ) {
+    completion(.success(send(envelope.data, to: peerId)))
+  }
+
+  func connectedPeers() throws -> [String] {
+    Array(Set(remoteCharacteristics.keys).union(subscribedCentrals.keys))
+  }
+}
+
+// MARK: - Helpers
+
+extension BleTransport {
+  private func startAdvertisingIfReady() {
+    guard wantsAdvertising,
+      let pm = peripheralManager, pm.state == .poweredOn, localCharacteristic != nil
+    else { return }
+    pm.startAdvertising([
+      CBAdvertisementDataServiceUUIDsKey: [BleConstants.serviceUUID],
+      CBAdvertisementDataLocalNameKey: displayName,
+    ])
+  }
+
+  private func startScanningIfReady() {
+    guard wantsScanning, let central = central, central.state == .poweredOn else { return }
+    // A background scan MUST specify the service UUID; nil-services delivers
+    // nothing while backgrounded.
+    central.scanForPeripherals(
+      withServices: [BleConstants.serviceUUID],
+      options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+  }
+
+  private func publishGattService() {
+    guard let pm = peripheralManager, pm.state == .poweredOn else { return }
+    let characteristic = CBMutableCharacteristic(
+      type: BleConstants.characteristicUUID,
+      properties: [.write, .writeWithoutResponse, .notify],
+      value: nil,
+      permissions: [.writeable])
+    let service = CBMutableService(type: BleConstants.serviceUUID, primary: true)
+    service.characteristics = [characteristic]
+    pm.removeAllServices()
+    pm.add(service)
+    localCharacteristic = characteristic
+  }
+
+  fileprivate func emitConnection(_ peerId: String, _ state: PeerConnectionState) {
+    events.emit(PeerConnectionEvent(peerId: peerId, state: state))
+  }
+
+  fileprivate func mapAdapterState(_ state: CBManagerState) -> BleAdapterState {
+    switch state {
+    case .resetting: return .resetting
+    case .unsupported: return .unsupported
+    case .unauthorized: return .unauthorized
+    case .poweredOff: return .poweredOff
+    case .poweredOn: return .poweredOn
+    default: return .unknown
+    }
+  }
+}
+
+// MARK: - CBCentralManagerDelegate
+
+extension BleTransport: CBCentralManagerDelegate {
+  func centralManagerDidUpdateState(_ central: CBCentralManager) {
+    events.emit(AdapterStateEvent(state: mapAdapterState(central.state)))
+    if central.state == .poweredOn { startScanningIfReady() }
+  }
+
+  func centralManager(
+    _ central: CBCentralManager, willRestoreState dict: [String: Any]
+  ) {
+    if let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] {
+      for peripheral in restored {
+        peripheral.delegate = self
+        peripherals[peripheral.identifier.uuidString] = peripheral
+      }
+    }
+  }
+
+  func centralManager(
+    _ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
+    advertisementData: [String: Any], rssi RSSI: NSNumber
+  ) {
+    let id = peripheral.identifier.uuidString
+    peripherals[id] = peripheral
+    peripheral.delegate = self
+    let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name
+    events.emit(PeerDiscoveredEvent(peer: PeerInfo(peerId: id, name: name, rssi: RSSI.int64Value)))
+  }
+
+  func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+    emitConnection(peripheral.identifier.uuidString, .connected)
+    peripheral.discoverServices([BleConstants.serviceUUID])
+  }
+
+  func centralManager(
+    _ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?
+  ) {
+    let id = peripheral.identifier.uuidString
+    remoteCharacteristics.removeValue(forKey: id)
+    emitConnection(id, .disconnected)
+  }
+}
+
+// MARK: - CBPeripheralDelegate (central role: talking to a remote peripheral)
+
+extension BleTransport: CBPeripheralDelegate {
+  func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+    guard let service = peripheral.services?.first(where: { $0.uuid == BleConstants.serviceUUID })
+    else { return }
+    peripheral.discoverCharacteristics([BleConstants.characteristicUUID], for: service)
+  }
+
+  func peripheral(
+    _ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?
+  ) {
+    guard
+      let characteristic = service.characteristics?.first(where: {
+        $0.uuid == BleConstants.characteristicUUID
+      })
+    else { return }
+    remoteCharacteristics[peripheral.identifier.uuidString] = characteristic
+    peripheral.setNotifyValue(true, for: characteristic)
+  }
+
+  func peripheral(
+    _ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?
+  ) {
+    guard let value = characteristic.value else { return }
+    if let envelope = reassembler.ingest(value) {
+      handleInbound(envelope, from: peripheral.identifier.uuidString)
+    }
+  }
+}
+
+// MARK: - CBPeripheralManagerDelegate (peripheral role: serving remote centrals)
+
+extension BleTransport: CBPeripheralManagerDelegate {
+  func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
+    if peripheral.state == .poweredOn {
+      publishGattService()
+      startAdvertisingIfReady()
+    }
+  }
+
+  func peripheralManager(_ peripheral: CBPeripheralManager, willRestoreState dict: [String: Any]) {
+    // Services are re-added on `peripheralManagerDidUpdateState`; nothing to
+    // restore eagerly for the skeleton.
+  }
+
+  func peripheralManager(
+    _ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]
+  ) {
+    for request in requests {
+      let id = request.central.identifier.uuidString
+      subscribedCentrals[id] = request.central
+      if let value = request.value, let envelope = reassembler.ingest(value) {
+        handleInbound(envelope, from: id)
+      }
+    }
+    peripheral.respond(to: requests[0], withResult: .success)
+  }
+
+  func peripheralManager(
+    _ peripheral: CBPeripheralManager, central: CBCentral,
+    didSubscribeTo characteristic: CBCharacteristic
+  ) {
+    subscribedCentrals[central.identifier.uuidString] = central
+    emitConnection(central.identifier.uuidString, .connected)
+  }
+
+  func peripheralManager(
+    _ peripheral: CBPeripheralManager, central: CBCentral,
+    didUnsubscribeFrom characteristic: CBCharacteristic
+  ) {
+    subscribedCentrals.removeValue(forKey: central.identifier.uuidString)
+    emitConnection(central.identifier.uuidString, .disconnected)
+  }
+
+  func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {
+    guard let characteristic = localCharacteristic else { return }
+    while !pendingNotifications.isEmpty {
+      let frame = pendingNotifications[0]
+      if peripheral.updateValue(frame, for: characteristic, onSubscribedCentrals: nil) {
+        pendingNotifications.removeFirst()
+      } else {
+        break
+      }
+    }
+  }
+}
+
+extension BleTransport {
+  /// 16 raw bytes of a UUID (tuple types can't be extended, so do it here).
+  fileprivate static func uuidBytes(_ uuid: UUID) -> Data {
+    var value = uuid.uuid
+    return withUnsafeBytes(of: &value) { Data($0) }
+  }
+}
