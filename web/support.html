@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>stonechat — Support</title>
+<style>
+  :root { --accent:#E0954C; --ink:#1f242c; --muted:#5d6470; --bg:#f4f5f7; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:720px; margin:0 auto; padding:40px 22px 80px; }
+  header { border-bottom:2px solid #e2e4e8; padding-bottom:18px; margin-bottom:8px; }
+  h1 { color:#2f3744; font-size:30px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:14px; }
+  h2 { font-size:18px; margin:28px 0 4px; }
+  a { color:var(--accent); }
+  .contact { background:#fdf1e3; border-radius:14px; padding:18px 20px; margin:22px 0; font-size:17px; }
+  details { border-bottom:1px solid #e2e4e8; padding:12px 0; }
+  summary { font-weight:600; cursor:pointer; }
+  details p { color:var(--muted); margin:8px 0 0; }
+  footer { margin-top:48px; padding-top:18px; border-top:1px solid #e2e4e8; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>stonechat — Support</h1>
+    <div class="sub">Offline, peer-to-peer chat over Bluetooth</div>
+  </header>
+
+  <div class="contact">
+    Need help? Email <a href="mailto:petkopavlovski@gmail.com">petkopavlovski@gmail.com</a>.
+  </div>
+
+  <h2>Getting started</h2>
+  <details open>
+    <summary>How do I send a message?</summary>
+    <p>stonechat needs <strong>two iPhones</strong>, both running stonechat, with
+    <strong>Bluetooth turned on</strong> and within Bluetooth range (roughly the
+    same room). Open the app on both phones — they discover each other
+    automatically, complete a secure handshake, and you can chat. There is no
+    sign-up and no internet connection involved.</p>
+  </details>
+
+  <details>
+    <summary>It says no devices found.</summary>
+    <p>Check that Bluetooth is on for both phones, that both have stonechat open
+    and have granted the Bluetooth permission, and that the phones are close
+    together. For the most reliable connection, keep at least one phone in the
+    foreground with the screen on.</p>
+  </details>
+
+  <details>
+    <summary>Is it private?</summary>
+    <p>Yes. Messages go directly between the two phones over Bluetooth, end-to-end
+    encrypted. There are no servers and no accounts — nothing reaches us. See the
+    <a href="privacy.html">Privacy Policy</a>.</p>
+  </details>
+
+  <details>
+    <summary>Does it work when the app is in the background?</summary>
+    <p>Best-effort. Delivery is most reliable when at least one device is in the
+    foreground with the screen on. Two backgrounded, screen-off phones may not
+    find each other.</p>
+  </details>
+
+  <details>
+    <summary>How do I stop talking to someone?</summary>
+    <p>Connections are only to a device you’re in range of and choose to use.
+    Close the app or move out of Bluetooth range to end a session.</p>
+  </details>
+
+  <p style="margin-top:28px"><a href="privacy.html">Privacy Policy →</a></p>
+
+  <footer>stonechat — offline, peer-to-peer, one-to-one chat over Bluetooth.</footer>
+</div>
+</body>
+</html>
