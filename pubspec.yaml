@@ -55,6 +55,7 @@ dev_dependencies:
   pigeon: ^26.3.4
   drift_dev: ^2.33.0
   build_runner: ^2.15.0
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -97,3 +98,10 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# App icon generation (source painted in lib/src/branding/stonechat_mark.dart;
+# render with GEN_ICON=1 flutter test test/tools/generate_icon_test.dart).
+flutter_launcher_icons:
+  image_path: "assets/icon/stonechat.png"
+  ios: true
+  remove_alpha_ios: true
