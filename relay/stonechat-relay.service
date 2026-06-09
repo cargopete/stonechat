@@ -1,0 +1,25 @@
+[Unit]
+Description=stonechat relay (blind store-and-forward + APNs waker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/stonechat-relay
+Restart=on-failure
+RestartSec=3
+DynamicUser=yes
+StateDirectory=stonechat-relay
+Environment=BIND_ADDR=127.0.0.1:8080
+Environment=DATABASE_PATH=/var/lib/stonechat-relay/relay.sqlite
+Environment=APNS_KEY_PATH=/var/lib/stonechat-relay/apns.p8
+Environment=APNS_KEY_ID=REPLACE_ME
+Environment=APNS_TEAM_ID=TRG36N45GH
+Environment=APNS_TOPIC=com.stonechat.stonechat
+Environment=APNS_PRODUCTION=true
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
