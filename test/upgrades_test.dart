@@ -119,5 +119,27 @@ void main() {
       await db.markState('in1', MessageDeliveryState.seen);
       expect(await db.inboundAwaitingReceipt(peerId), isEmpty);
     });
+
+    test('pendingFor excludes seen so the retry loop cannot clobber it',
+        () async {
+      Future<void> add(String id, MessageDeliveryState state) =>
+          db.insertMessage(MessagesCompanion(
+            messageId: Value(id),
+            peerId: const Value(peerId),
+            direction: const Value(MessageDirection.outbound),
+            body: Value(id),
+            timestampMs: const Value(1),
+            state: Value(state),
+            createdAtMs: const Value(1),
+            envelope: Value(Uint8List.fromList([1, 2, 3])),
+          ));
+      await add('queued', MessageDeliveryState.queued);
+      await add('sent', MessageDeliveryState.sent);
+      await add('delivered', MessageDeliveryState.acked);
+      await add('seen', MessageDeliveryState.seen);
+
+      final pending = await db.pendingFor(peerId);
+      expect(pending.map((m) => m.messageId).toSet(), {'queued', 'sent'});
+    });
   });
 }

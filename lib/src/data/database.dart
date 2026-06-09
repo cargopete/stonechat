@@ -172,7 +172,10 @@ class AppDatabase extends _$AppDatabase {
         .write(MessagesCompanion(state: Value(state)));
   }
 
-  /// Outbox: messages for [peerId] still awaiting delivery confirmation.
+  /// Outbox: messages for [peerId] still awaiting delivery confirmation. A
+  /// `seen` message is delivered-and-read, so it must be excluded too —
+  /// otherwise the retry loop re-sends it and `markState` knocks it back down
+  /// to `sent`, and "seen" never sticks.
   Future<List<Message>> pendingFor(String peerId) {
     return (select(messages)
           ..where((m) =>
@@ -180,6 +183,7 @@ class AppDatabase extends _$AppDatabase {
               m.direction.equalsValue(MessageDirection.outbound) &
               m.state.isNotInValues([
                 MessageDeliveryState.acked,
+                MessageDeliveryState.seen,
                 MessageDeliveryState.failed,
               ])))
         .get();
