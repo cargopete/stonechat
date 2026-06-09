@@ -383,7 +383,29 @@ extension BleTransport: CBCentralManagerDelegate {
   ) {
     let id = peripheral.identifier.uuidString
     remoteCharacteristics.removeValue(forKey: id)
+    pendingWrites.removeValue(forKey: ObjectIdentifier(peripheral))
     emitConnection(id, .disconnected)
+    // Persistent reconnect: a connect with no timeout stays pending and
+    // re-establishes automatically the moment the peer is back in range, so a
+    // dropped link heals itself without the user doing anything.
+    reconnect(peripheral)
+  }
+
+  func centralManager(
+    _ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?
+  ) {
+    // Keep trying — same persistent-reconnect intent as a clean disconnect.
+    reconnect(peripheral)
+  }
+
+  /// Re-issues a pending connection to a known peripheral.
+  private func reconnect(_ peripheral: CBPeripheral) {
+    guard peripherals[peripheral.identifier.uuidString] != nil else { return }
+    central?.connect(peripheral, options: [
+      CBConnectPeripheralOptionNotifyOnConnectionKey: true,
+      CBConnectPeripheralOptionNotifyOnDisconnectionKey: true,
+      CBConnectPeripheralOptionNotifyOnNotificationKey: true,
+    ])
   }
 }
 

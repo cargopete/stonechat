@@ -370,75 +370,70 @@ class ChatService {
     await _api.sendEnvelope(connectionId, ack.toBytes());
   }
 
-  /// Sends a text message to a known peer, persisting outbox state.
-  Future<void> sendText(String identityHex, String text) async {
-    final keys = _keysByIdentity[identityHex];
-    final connectionId = _connectionByIdentity[identityHex];
-    if (keys == null || connectionId == null) {
-      throw StateError('Peer $identityHex is not connected / not handshaked');
+  /// Sends a text message to a known peer. Works offline: the message is sealed
+  /// and queued immediately, and the store-and-forward outbox delivers it on the
+  /// next reconnect — so a dropped link never surfaces an error to the user.
+  Future<void> sendText(String identityHex, String text) => _enqueueOutbound(
+        identityHex: identityHex,
+        type: EnvelopeType.message,
+        plaintext: Uint8List.fromList(utf8.encode(text)),
+        kind: MessageKind.text,
+        body: text,
+      );
+
+  /// Sends a photo (already-compressed bytes). Same offline-tolerant outbox path
+  /// as text; the transport fragments the larger payload into BLE frames.
+  Future<void> sendImage(String identityHex, Uint8List imageBytes) =>
+      _enqueueOutbound(
+        identityHex: identityHex,
+        type: EnvelopeType.image,
+        plaintext: imageBytes,
+        kind: MessageKind.image,
+        mediaBytes: imageBytes,
+      );
+
+  /// Seals an outbound message, records it as `queued`, and dispatches it now if
+  /// the peer is connected. If offline (or the dispatch fails), it stays
+  /// `queued` and the outbox flushes it on the next reconnect+handshake — never
+  /// throwing for "not connected". Throws only for a peer we've never met (no
+  /// keys on record), which the UI can't reach anyway.
+  Future<void> _enqueueOutbound({
+    required String identityHex,
+    required EnvelopeType type,
+    required Uint8List plaintext,
+    required MessageKind kind,
+    String body = '',
+    Uint8List? mediaBytes,
+  }) async {
+    final keys = await _resolvePeerKeys(identityHex);
+    if (keys == null) {
+      throw StateError('No handshake on record for this peer yet');
     }
 
-    final env = crypto.seal(
-      type: EnvelopeType.message,
-      plaintext: Uint8List.fromList(utf8.encode(text)),
-      recipient: keys,
-    );
+    final env = crypto.seal(type: type, plaintext: plaintext, recipient: keys);
     final messageIdHex = hex(env.messageId);
 
     await db.insertMessage(MessagesCompanion(
       messageId: Value(messageIdHex),
       peerId: Value(identityHex),
       direction: Value(MessageDirection.outbound),
-      body: Value(text),
+      kind: Value(kind),
+      body: Value(body),
+      mediaBytes: Value(mediaBytes),
       timestampMs: Value(env.timestampMs),
       state: Value(MessageDeliveryState.queued),
       createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
       envelope: Value(env.toBytes()),
     ));
 
-    final dispatched = await _api.sendEnvelope(connectionId, env.toBytes());
-    await db.markState(
-      messageIdHex,
-      dispatched ? MessageDeliveryState.sent : MessageDeliveryState.failed,
-    );
-  }
-
-  /// Sends a photo (already-compressed bytes) to a known peer. Goes through the
-  /// same boxed-envelope + outbox path as text, so delivery/read receipts and
-  /// store-and-forward retries work identically; the transport fragments the
-  /// larger payload into BLE frames and reassembles on the far side.
-  Future<void> sendImage(String identityHex, Uint8List imageBytes) async {
-    final keys = _keysByIdentity[identityHex];
     final connectionId = _connectionByIdentity[identityHex];
-    if (keys == null || connectionId == null) {
-      throw StateError('Peer $identityHex is not connected / not handshaked');
+    if (connectionId != null) {
+      final dispatched = await _api.sendEnvelope(connectionId, env.toBytes());
+      if (dispatched) {
+        await db.markState(messageIdHex, MessageDeliveryState.sent);
+      }
+      // On a failed dispatch, leave it queued for the outbox to retry.
     }
-
-    final env = crypto.seal(
-      type: EnvelopeType.image,
-      plaintext: imageBytes,
-      recipient: keys,
-    );
-    final messageIdHex = hex(env.messageId);
-
-    await db.insertMessage(MessagesCompanion(
-      messageId: Value(messageIdHex),
-      peerId: Value(identityHex),
-      direction: Value(MessageDirection.outbound),
-      kind: Value(MessageKind.image),
-      body: Value(''),
-      mediaBytes: Value(imageBytes),
-      timestampMs: Value(env.timestampMs),
-      state: Value(MessageDeliveryState.queued),
-      createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
-      envelope: Value(env.toBytes()),
-    ));
-
-    final dispatched = await _api.sendEnvelope(connectionId, env.toBytes());
-    await db.markState(
-      messageIdHex,
-      dispatched ? MessageDeliveryState.sent : MessageDeliveryState.failed,
-    );
   }
 
   /// Periodic retry: re-flush the outbox to every online peer, honouring each
