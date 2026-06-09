@@ -66,12 +66,14 @@ class _ConversationPageState extends State<ConversationPage> {
   Future<void> _sendImage() async {
     if (_sending) return;
     try {
-      // Compress hard — Bluetooth throughput is low, so keep photos small.
+      // Compress hard — Bluetooth throughput is low, so keep photos small. At
+      // ~768px / quality 30 a typical photo is ~20–35 KB, which crosses the link
+      // in a few seconds rather than tens, while still looking fine on a phone.
       final picked = await ImagePicker().pickImage(
         source: ImageSource.gallery,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 40,
+        maxWidth: 768,
+        maxHeight: 768,
+        imageQuality: 30,
       );
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
