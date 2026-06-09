@@ -47,6 +47,10 @@ final class BleTransport: NSObject {
   private var peripherals: [String: CBPeripheral] = [:]
   private var remoteCharacteristics: [String: CBCharacteristic] = [:]
   private var wantsScanning = false
+  /// Write-without-response frames awaiting room in the link's buffer, keyed by
+  /// peripheral; paced via `canSendWriteWithoutResponse` so large payloads (e.g.
+  /// photos) aren't dropped on overflow.
+  private var pendingWrites: [ObjectIdentifier: [Data]] = [:]
 
   private override init() { super.init() }
 
@@ -103,9 +107,11 @@ final class BleTransport: NSObject {
     if let peripheral = peripherals[peerId], let characteristic = remoteCharacteristics[peerId] {
       let maxLen = peripheral.maximumWriteValueLength(for: .withoutResponse)
       let frames = TransportFragmenter.split(data, messageId: messageId, maxFrameSize: maxLen)
-      for frame in frames {
-        peripheral.writeValue(frame, for: characteristic, type: .withoutResponse)
-      }
+      // Queue all frames and pace them out — writing hundreds in a tight loop
+      // overflows Core Bluetooth's small buffer and silently drops the excess,
+      // which is exactly why large payloads (photos) never arrived.
+      pendingWrites[ObjectIdentifier(peripheral), default: []].append(contentsOf: frames)
+      drainWrites(peripheral, characteristic)
       return true
     }
 
@@ -121,6 +127,19 @@ final class BleTransport: NSObject {
     }
 
     return false
+  }
+
+  /// Writes queued frames while the peripheral can accept write-without-response
+  /// packets, pausing when the buffer is full. Core Bluetooth calls
+  /// `peripheralIsReady(toSendWriteWithoutResponse:)` when there's room again,
+  /// which resumes the drain — so every frame eventually goes out, in order.
+  private func drainWrites(_ peripheral: CBPeripheral, _ characteristic: CBCharacteristic) {
+    let key = ObjectIdentifier(peripheral)
+    while peripheral.canSendWriteWithoutResponse,
+          let frame = pendingWrites[key]?.first {
+      pendingWrites[key] = Array((pendingWrites[key] ?? []).dropFirst())
+      peripheral.writeValue(frame, for: characteristic, type: .withoutResponse)
+    }
   }
 
   // MARK: - Inbound
@@ -375,6 +394,14 @@ extension BleTransport: CBPeripheralDelegate {
     guard let service = peripheral.services?.first(where: { $0.uuid == BleConstants.serviceUUID })
     else { return }
     peripheral.discoverCharacteristics([BleConstants.characteristicUUID], for: service)
+  }
+
+  /// The link can accept more write-without-response packets — resume draining
+  /// any queued frames for this peripheral.
+  func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+    guard let characteristic = remoteCharacteristics[peripheral.identifier.uuidString]
+    else { return }
+    drainWrites(peripheral, characteristic)
   }
 
   func peripheral(
