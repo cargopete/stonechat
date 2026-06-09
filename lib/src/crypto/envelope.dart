@@ -22,7 +22,14 @@ enum EnvelopeType {
   fragmentStart(2),
   fragmentCont(3),
   fragmentEnd(4),
-  hello(5);
+  hello(5),
+  // Appended only — the wire value is persisted/exchanged, never reorder.
+  // announceName: boxed UTF-8 display name the sender wants to be known by.
+  // read: a read receipt; payload is the 16-byte message_id being marked seen.
+  // image: a photo message; payload is the (compressed) image bytes.
+  announceName(6),
+  read(7),
+  image(8);
 
   const EnvelopeType(this.wire);
   final int wire;

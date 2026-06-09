@@ -28,6 +28,17 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _nicknameMeta = const VerificationMeta(
+    'nickname',
+  );
+  @override
+  late final GeneratedColumn<String> nickname = GeneratedColumn<String>(
+    'nickname',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _identityPublicKeyMeta = const VerificationMeta(
     'identityPublicKey',
   );
@@ -67,6 +78,7 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
   List<GeneratedColumn> get $columns => [
     id,
     displayName,
+    nickname,
     identityPublicKey,
     boxPublicKey,
     lastSeenMs,
@@ -95,6 +107,12 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
           data['display_name']!,
           _displayNameMeta,
         ),
+      );
+    }
+    if (data.containsKey('nickname')) {
+      context.handle(
+        _nicknameMeta,
+        nickname.isAcceptableOrUnknown(data['nickname']!, _nicknameMeta),
       );
     }
     if (data.containsKey('identity_public_key')) {
@@ -145,6 +163,10 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
         DriftSqlType.string,
         data['${effectivePrefix}display_name'],
       ),
+      nickname: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}nickname'],
+      ),
       identityPublicKey: attachedDatabase.typeMapping.read(
         DriftSqlType.blob,
         data['${effectivePrefix}identity_public_key'],
@@ -168,13 +190,21 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
 
 class Peer extends DataClass implements Insertable<Peer> {
   final String id;
+
+  /// The name the peer announced for themselves (via an `announceName`
+  /// envelope), or null until they announce one.
   final String? displayName;
+
+  /// A local nickname the user set for this peer, overriding [displayName].
+  /// Never leaves the device.
+  final String? nickname;
   final Uint8List identityPublicKey;
   final Uint8List boxPublicKey;
   final int? lastSeenMs;
   const Peer({
     required this.id,
     this.displayName,
+    this.nickname,
     required this.identityPublicKey,
     required this.boxPublicKey,
     this.lastSeenMs,
@@ -185,6 +215,9 @@ class Peer extends DataClass implements Insertable<Peer> {
     map['id'] = Variable<String>(id);
     if (!nullToAbsent || displayName != null) {
       map['display_name'] = Variable<String>(displayName);
+    }
+    if (!nullToAbsent || nickname != null) {
+      map['nickname'] = Variable<String>(nickname);
     }
     map['identity_public_key'] = Variable<Uint8List>(identityPublicKey);
     map['box_public_key'] = Variable<Uint8List>(boxPublicKey);
@@ -200,6 +233,9 @@ class Peer extends DataClass implements Insertable<Peer> {
       displayName: displayName == null && nullToAbsent
           ? const Value.absent()
           : Value(displayName),
+      nickname: nickname == null && nullToAbsent
+          ? const Value.absent()
+          : Value(nickname),
       identityPublicKey: Value(identityPublicKey),
       boxPublicKey: Value(boxPublicKey),
       lastSeenMs: lastSeenMs == null && nullToAbsent
@@ -216,6 +252,7 @@ class Peer extends DataClass implements Insertable<Peer> {
     return Peer(
       id: serializer.fromJson<String>(json['id']),
       displayName: serializer.fromJson<String?>(json['displayName']),
+      nickname: serializer.fromJson<String?>(json['nickname']),
       identityPublicKey: serializer.fromJson<Uint8List>(
         json['identityPublicKey'],
       ),
@@ -229,6 +266,7 @@ class Peer extends DataClass implements Insertable<Peer> {
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
       'displayName': serializer.toJson<String?>(displayName),
+      'nickname': serializer.toJson<String?>(nickname),
       'identityPublicKey': serializer.toJson<Uint8List>(identityPublicKey),
       'boxPublicKey': serializer.toJson<Uint8List>(boxPublicKey),
       'lastSeenMs': serializer.toJson<int?>(lastSeenMs),
@@ -238,12 +276,14 @@ class Peer extends DataClass implements Insertable<Peer> {
   Peer copyWith({
     String? id,
     Value<String?> displayName = const Value.absent(),
+    Value<String?> nickname = const Value.absent(),
     Uint8List? identityPublicKey,
     Uint8List? boxPublicKey,
     Value<int?> lastSeenMs = const Value.absent(),
   }) => Peer(
     id: id ?? this.id,
     displayName: displayName.present ? displayName.value : this.displayName,
+    nickname: nickname.present ? nickname.value : this.nickname,
     identityPublicKey: identityPublicKey ?? this.identityPublicKey,
     boxPublicKey: boxPublicKey ?? this.boxPublicKey,
     lastSeenMs: lastSeenMs.present ? lastSeenMs.value : this.lastSeenMs,
@@ -254,6 +294,7 @@ class Peer extends DataClass implements Insertable<Peer> {
       displayName: data.displayName.present
           ? data.displayName.value
           : this.displayName,
+      nickname: data.nickname.present ? data.nickname.value : this.nickname,
       identityPublicKey: data.identityPublicKey.present
           ? data.identityPublicKey.value
           : this.identityPublicKey,
@@ -271,6 +312,7 @@ class Peer extends DataClass implements Insertable<Peer> {
     return (StringBuffer('Peer(')
           ..write('id: $id, ')
           ..write('displayName: $displayName, ')
+          ..write('nickname: $nickname, ')
           ..write('identityPublicKey: $identityPublicKey, ')
           ..write('boxPublicKey: $boxPublicKey, ')
           ..write('lastSeenMs: $lastSeenMs')
@@ -282,6 +324,7 @@ class Peer extends DataClass implements Insertable<Peer> {
   int get hashCode => Object.hash(
     id,
     displayName,
+    nickname,
     $driftBlobEquality.hash(identityPublicKey),
     $driftBlobEquality.hash(boxPublicKey),
     lastSeenMs,
@@ -292,6 +335,7 @@ class Peer extends DataClass implements Insertable<Peer> {
       (other is Peer &&
           other.id == this.id &&
           other.displayName == this.displayName &&
+          other.nickname == this.nickname &&
           $driftBlobEquality.equals(
             other.identityPublicKey,
             this.identityPublicKey,
@@ -303,6 +347,7 @@ class Peer extends DataClass implements Insertable<Peer> {
 class PeersCompanion extends UpdateCompanion<Peer> {
   final Value<String> id;
   final Value<String?> displayName;
+  final Value<String?> nickname;
   final Value<Uint8List> identityPublicKey;
   final Value<Uint8List> boxPublicKey;
   final Value<int?> lastSeenMs;
@@ -310,6 +355,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   const PeersCompanion({
     this.id = const Value.absent(),
     this.displayName = const Value.absent(),
+    this.nickname = const Value.absent(),
     this.identityPublicKey = const Value.absent(),
     this.boxPublicKey = const Value.absent(),
     this.lastSeenMs = const Value.absent(),
@@ -318,6 +364,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   PeersCompanion.insert({
     required String id,
     this.displayName = const Value.absent(),
+    this.nickname = const Value.absent(),
     required Uint8List identityPublicKey,
     required Uint8List boxPublicKey,
     this.lastSeenMs = const Value.absent(),
@@ -328,6 +375,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   static Insertable<Peer> custom({
     Expression<String>? id,
     Expression<String>? displayName,
+    Expression<String>? nickname,
     Expression<Uint8List>? identityPublicKey,
     Expression<Uint8List>? boxPublicKey,
     Expression<int>? lastSeenMs,
@@ -336,6 +384,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (displayName != null) 'display_name': displayName,
+      if (nickname != null) 'nickname': nickname,
       if (identityPublicKey != null) 'identity_public_key': identityPublicKey,
       if (boxPublicKey != null) 'box_public_key': boxPublicKey,
       if (lastSeenMs != null) 'last_seen_ms': lastSeenMs,
@@ -346,6 +395,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   PeersCompanion copyWith({
     Value<String>? id,
     Value<String?>? displayName,
+    Value<String?>? nickname,
     Value<Uint8List>? identityPublicKey,
     Value<Uint8List>? boxPublicKey,
     Value<int?>? lastSeenMs,
@@ -354,6 +404,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     return PeersCompanion(
       id: id ?? this.id,
       displayName: displayName ?? this.displayName,
+      nickname: nickname ?? this.nickname,
       identityPublicKey: identityPublicKey ?? this.identityPublicKey,
       boxPublicKey: boxPublicKey ?? this.boxPublicKey,
       lastSeenMs: lastSeenMs ?? this.lastSeenMs,
@@ -369,6 +420,9 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     }
     if (displayName.present) {
       map['display_name'] = Variable<String>(displayName.value);
+    }
+    if (nickname.present) {
+      map['nickname'] = Variable<String>(nickname.value);
     }
     if (identityPublicKey.present) {
       map['identity_public_key'] = Variable<Uint8List>(identityPublicKey.value);
@@ -390,6 +444,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     return (StringBuffer('PeersCompanion(')
           ..write('id: $id, ')
           ..write('displayName: $displayName, ')
+          ..write('nickname: $nickname, ')
           ..write('identityPublicKey: $identityPublicKey, ')
           ..write('boxPublicKey: $boxPublicKey, ')
           ..write('lastSeenMs: $lastSeenMs, ')
@@ -436,6 +491,16 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         type: DriftSqlType.int,
         requiredDuringInsert: true,
       ).withConverter<MessageDirection>($MessagesTable.$converterdirection);
+  @override
+  late final GeneratedColumnWithTypeConverter<MessageKind, int> kind =
+      GeneratedColumn<int>(
+        'kind',
+        aliasedName,
+        false,
+        type: DriftSqlType.int,
+        requiredDuringInsert: false,
+        defaultValue: const Constant(0),
+      ).withConverter<MessageKind>($MessagesTable.$converterkind);
   static const VerificationMeta _bodyMeta = const VerificationMeta('body');
   @override
   late final GeneratedColumn<String> body = GeneratedColumn<String>(
@@ -476,6 +541,17 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _mediaBytesMeta = const VerificationMeta(
+    'mediaBytes',
+  );
+  @override
+  late final GeneratedColumn<Uint8List> mediaBytes = GeneratedColumn<Uint8List>(
+    'media_bytes',
+    aliasedName,
+    true,
+    type: DriftSqlType.blob,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _envelopeMeta = const VerificationMeta(
     'envelope',
   );
@@ -492,10 +568,12 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     messageId,
     peerId,
     direction,
+    kind,
     body,
     timestampMs,
     state,
     createdAtMs,
+    mediaBytes,
     envelope,
   ];
   @override
@@ -556,6 +634,12 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     } else if (isInserting) {
       context.missing(_createdAtMsMeta);
     }
+    if (data.containsKey('media_bytes')) {
+      context.handle(
+        _mediaBytesMeta,
+        mediaBytes.isAcceptableOrUnknown(data['media_bytes']!, _mediaBytesMeta),
+      );
+    }
     if (data.containsKey('envelope')) {
       context.handle(
         _envelopeMeta,
@@ -585,6 +669,12 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
           data['${effectivePrefix}direction'],
         )!,
       ),
+      kind: $MessagesTable.$converterkind.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}kind'],
+        )!,
+      ),
       body: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}body'],
@@ -603,6 +693,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.int,
         data['${effectivePrefix}created_at_ms'],
       )!,
+      mediaBytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}media_bytes'],
+      ),
       envelope: attachedDatabase.typeMapping.read(
         DriftSqlType.blob,
         data['${effectivePrefix}envelope'],
@@ -617,6 +711,8 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
 
   static JsonTypeConverter2<MessageDirection, int, int> $converterdirection =
       const EnumIndexConverter<MessageDirection>(MessageDirection.values);
+  static JsonTypeConverter2<MessageKind, int, int> $converterkind =
+      const EnumIndexConverter<MessageKind>(MessageKind.values);
   static JsonTypeConverter2<MessageDeliveryState, int, int> $converterstate =
       const EnumIndexConverter<MessageDeliveryState>(
         MessageDeliveryState.values,
@@ -627,10 +723,17 @@ class Message extends DataClass implements Insertable<Message> {
   final String messageId;
   final String peerId;
   final MessageDirection direction;
+
+  /// Whether this row is a text or an image message.
+  final MessageKind kind;
   final String body;
   final int timestampMs;
   final MessageDeliveryState state;
   final int createdAtMs;
+
+  /// The (compressed) image bytes for an image message, stored encrypted at
+  /// rest with the rest of the DB. Null for text messages.
+  final Uint8List? mediaBytes;
 
   /// The sealed envelope bytes for an outbound message, kept so the outbox can
   /// re-send the *identical* bytes (same message_id) on reconnect — which is
@@ -640,10 +743,12 @@ class Message extends DataClass implements Insertable<Message> {
     required this.messageId,
     required this.peerId,
     required this.direction,
+    required this.kind,
     required this.body,
     required this.timestampMs,
     required this.state,
     required this.createdAtMs,
+    this.mediaBytes,
     this.envelope,
   });
   @override
@@ -656,12 +761,18 @@ class Message extends DataClass implements Insertable<Message> {
         $MessagesTable.$converterdirection.toSql(direction),
       );
     }
+    {
+      map['kind'] = Variable<int>($MessagesTable.$converterkind.toSql(kind));
+    }
     map['body'] = Variable<String>(body);
     map['timestamp_ms'] = Variable<int>(timestampMs);
     {
       map['state'] = Variable<int>($MessagesTable.$converterstate.toSql(state));
     }
     map['created_at_ms'] = Variable<int>(createdAtMs);
+    if (!nullToAbsent || mediaBytes != null) {
+      map['media_bytes'] = Variable<Uint8List>(mediaBytes);
+    }
     if (!nullToAbsent || envelope != null) {
       map['envelope'] = Variable<Uint8List>(envelope);
     }
@@ -673,10 +784,14 @@ class Message extends DataClass implements Insertable<Message> {
       messageId: Value(messageId),
       peerId: Value(peerId),
       direction: Value(direction),
+      kind: Value(kind),
       body: Value(body),
       timestampMs: Value(timestampMs),
       state: Value(state),
       createdAtMs: Value(createdAtMs),
+      mediaBytes: mediaBytes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaBytes),
       envelope: envelope == null && nullToAbsent
           ? const Value.absent()
           : Value(envelope),
@@ -694,12 +809,16 @@ class Message extends DataClass implements Insertable<Message> {
       direction: $MessagesTable.$converterdirection.fromJson(
         serializer.fromJson<int>(json['direction']),
       ),
+      kind: $MessagesTable.$converterkind.fromJson(
+        serializer.fromJson<int>(json['kind']),
+      ),
       body: serializer.fromJson<String>(json['body']),
       timestampMs: serializer.fromJson<int>(json['timestampMs']),
       state: $MessagesTable.$converterstate.fromJson(
         serializer.fromJson<int>(json['state']),
       ),
       createdAtMs: serializer.fromJson<int>(json['createdAtMs']),
+      mediaBytes: serializer.fromJson<Uint8List?>(json['mediaBytes']),
       envelope: serializer.fromJson<Uint8List?>(json['envelope']),
     );
   }
@@ -712,12 +831,16 @@ class Message extends DataClass implements Insertable<Message> {
       'direction': serializer.toJson<int>(
         $MessagesTable.$converterdirection.toJson(direction),
       ),
+      'kind': serializer.toJson<int>(
+        $MessagesTable.$converterkind.toJson(kind),
+      ),
       'body': serializer.toJson<String>(body),
       'timestampMs': serializer.toJson<int>(timestampMs),
       'state': serializer.toJson<int>(
         $MessagesTable.$converterstate.toJson(state),
       ),
       'createdAtMs': serializer.toJson<int>(createdAtMs),
+      'mediaBytes': serializer.toJson<Uint8List?>(mediaBytes),
       'envelope': serializer.toJson<Uint8List?>(envelope),
     };
   }
@@ -726,19 +849,23 @@ class Message extends DataClass implements Insertable<Message> {
     String? messageId,
     String? peerId,
     MessageDirection? direction,
+    MessageKind? kind,
     String? body,
     int? timestampMs,
     MessageDeliveryState? state,
     int? createdAtMs,
+    Value<Uint8List?> mediaBytes = const Value.absent(),
     Value<Uint8List?> envelope = const Value.absent(),
   }) => Message(
     messageId: messageId ?? this.messageId,
     peerId: peerId ?? this.peerId,
     direction: direction ?? this.direction,
+    kind: kind ?? this.kind,
     body: body ?? this.body,
     timestampMs: timestampMs ?? this.timestampMs,
     state: state ?? this.state,
     createdAtMs: createdAtMs ?? this.createdAtMs,
+    mediaBytes: mediaBytes.present ? mediaBytes.value : this.mediaBytes,
     envelope: envelope.present ? envelope.value : this.envelope,
   );
   Message copyWithCompanion(MessagesCompanion data) {
@@ -746,6 +873,7 @@ class Message extends DataClass implements Insertable<Message> {
       messageId: data.messageId.present ? data.messageId.value : this.messageId,
       peerId: data.peerId.present ? data.peerId.value : this.peerId,
       direction: data.direction.present ? data.direction.value : this.direction,
+      kind: data.kind.present ? data.kind.value : this.kind,
       body: data.body.present ? data.body.value : this.body,
       timestampMs: data.timestampMs.present
           ? data.timestampMs.value
@@ -754,6 +882,9 @@ class Message extends DataClass implements Insertable<Message> {
       createdAtMs: data.createdAtMs.present
           ? data.createdAtMs.value
           : this.createdAtMs,
+      mediaBytes: data.mediaBytes.present
+          ? data.mediaBytes.value
+          : this.mediaBytes,
       envelope: data.envelope.present ? data.envelope.value : this.envelope,
     );
   }
@@ -764,10 +895,12 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('messageId: $messageId, ')
           ..write('peerId: $peerId, ')
           ..write('direction: $direction, ')
+          ..write('kind: $kind, ')
           ..write('body: $body, ')
           ..write('timestampMs: $timestampMs, ')
           ..write('state: $state, ')
           ..write('createdAtMs: $createdAtMs, ')
+          ..write('mediaBytes: $mediaBytes, ')
           ..write('envelope: $envelope')
           ..write(')'))
         .toString();
@@ -778,10 +911,12 @@ class Message extends DataClass implements Insertable<Message> {
     messageId,
     peerId,
     direction,
+    kind,
     body,
     timestampMs,
     state,
     createdAtMs,
+    $driftBlobEquality.hash(mediaBytes),
     $driftBlobEquality.hash(envelope),
   );
   @override
@@ -791,10 +926,12 @@ class Message extends DataClass implements Insertable<Message> {
           other.messageId == this.messageId &&
           other.peerId == this.peerId &&
           other.direction == this.direction &&
+          other.kind == this.kind &&
           other.body == this.body &&
           other.timestampMs == this.timestampMs &&
           other.state == this.state &&
           other.createdAtMs == this.createdAtMs &&
+          $driftBlobEquality.equals(other.mediaBytes, this.mediaBytes) &&
           $driftBlobEquality.equals(other.envelope, this.envelope));
 }
 
@@ -802,20 +939,24 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<String> messageId;
   final Value<String> peerId;
   final Value<MessageDirection> direction;
+  final Value<MessageKind> kind;
   final Value<String> body;
   final Value<int> timestampMs;
   final Value<MessageDeliveryState> state;
   final Value<int> createdAtMs;
+  final Value<Uint8List?> mediaBytes;
   final Value<Uint8List?> envelope;
   final Value<int> rowid;
   const MessagesCompanion({
     this.messageId = const Value.absent(),
     this.peerId = const Value.absent(),
     this.direction = const Value.absent(),
+    this.kind = const Value.absent(),
     this.body = const Value.absent(),
     this.timestampMs = const Value.absent(),
     this.state = const Value.absent(),
     this.createdAtMs = const Value.absent(),
+    this.mediaBytes = const Value.absent(),
     this.envelope = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -823,10 +964,12 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     required String messageId,
     required String peerId,
     required MessageDirection direction,
+    this.kind = const Value.absent(),
     required String body,
     required int timestampMs,
     required MessageDeliveryState state,
     required int createdAtMs,
+    this.mediaBytes = const Value.absent(),
     this.envelope = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : messageId = Value(messageId),
@@ -840,10 +983,12 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<String>? messageId,
     Expression<String>? peerId,
     Expression<int>? direction,
+    Expression<int>? kind,
     Expression<String>? body,
     Expression<int>? timestampMs,
     Expression<int>? state,
     Expression<int>? createdAtMs,
+    Expression<Uint8List>? mediaBytes,
     Expression<Uint8List>? envelope,
     Expression<int>? rowid,
   }) {
@@ -851,10 +996,12 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (messageId != null) 'message_id': messageId,
       if (peerId != null) 'peer_id': peerId,
       if (direction != null) 'direction': direction,
+      if (kind != null) 'kind': kind,
       if (body != null) 'body': body,
       if (timestampMs != null) 'timestamp_ms': timestampMs,
       if (state != null) 'state': state,
       if (createdAtMs != null) 'created_at_ms': createdAtMs,
+      if (mediaBytes != null) 'media_bytes': mediaBytes,
       if (envelope != null) 'envelope': envelope,
       if (rowid != null) 'rowid': rowid,
     });
@@ -864,10 +1011,12 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<String>? messageId,
     Value<String>? peerId,
     Value<MessageDirection>? direction,
+    Value<MessageKind>? kind,
     Value<String>? body,
     Value<int>? timestampMs,
     Value<MessageDeliveryState>? state,
     Value<int>? createdAtMs,
+    Value<Uint8List?>? mediaBytes,
     Value<Uint8List?>? envelope,
     Value<int>? rowid,
   }) {
@@ -875,10 +1024,12 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       messageId: messageId ?? this.messageId,
       peerId: peerId ?? this.peerId,
       direction: direction ?? this.direction,
+      kind: kind ?? this.kind,
       body: body ?? this.body,
       timestampMs: timestampMs ?? this.timestampMs,
       state: state ?? this.state,
       createdAtMs: createdAtMs ?? this.createdAtMs,
+      mediaBytes: mediaBytes ?? this.mediaBytes,
       envelope: envelope ?? this.envelope,
       rowid: rowid ?? this.rowid,
     );
@@ -898,6 +1049,11 @@ class MessagesCompanion extends UpdateCompanion<Message> {
         $MessagesTable.$converterdirection.toSql(direction.value),
       );
     }
+    if (kind.present) {
+      map['kind'] = Variable<int>(
+        $MessagesTable.$converterkind.toSql(kind.value),
+      );
+    }
     if (body.present) {
       map['body'] = Variable<String>(body.value);
     }
@@ -911,6 +1067,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     }
     if (createdAtMs.present) {
       map['created_at_ms'] = Variable<int>(createdAtMs.value);
+    }
+    if (mediaBytes.present) {
+      map['media_bytes'] = Variable<Uint8List>(mediaBytes.value);
     }
     if (envelope.present) {
       map['envelope'] = Variable<Uint8List>(envelope.value);
@@ -927,11 +1086,218 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('messageId: $messageId, ')
           ..write('peerId: $peerId, ')
           ..write('direction: $direction, ')
+          ..write('kind: $kind, ')
           ..write('body: $body, ')
           ..write('timestampMs: $timestampMs, ')
           ..write('state: $state, ')
           ..write('createdAtMs: $createdAtMs, ')
+          ..write('mediaBytes: $mediaBytes, ')
           ..write('envelope: $envelope, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $SettingsTable extends Settings with TableInfo<$SettingsTable, Setting> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SettingsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _keyMeta = const VerificationMeta('key');
+  @override
+  late final GeneratedColumn<String> key = GeneratedColumn<String>(
+    'key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _valueMeta = const VerificationMeta('value');
+  @override
+  late final GeneratedColumn<String> value = GeneratedColumn<String>(
+    'value',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [key, value];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'settings';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<Setting> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('key')) {
+      context.handle(
+        _keyMeta,
+        key.isAcceptableOrUnknown(data['key']!, _keyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_keyMeta);
+    }
+    if (data.containsKey('value')) {
+      context.handle(
+        _valueMeta,
+        value.isAcceptableOrUnknown(data['value']!, _valueMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_valueMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {key};
+  @override
+  Setting map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Setting(
+      key: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}key'],
+      )!,
+      value: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}value'],
+      )!,
+    );
+  }
+
+  @override
+  $SettingsTable createAlias(String alias) {
+    return $SettingsTable(attachedDatabase, alias);
+  }
+}
+
+class Setting extends DataClass implements Insertable<Setting> {
+  final String key;
+  final String value;
+  const Setting({required this.key, required this.value});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['key'] = Variable<String>(key);
+    map['value'] = Variable<String>(value);
+    return map;
+  }
+
+  SettingsCompanion toCompanion(bool nullToAbsent) {
+    return SettingsCompanion(key: Value(key), value: Value(value));
+  }
+
+  factory Setting.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Setting(
+      key: serializer.fromJson<String>(json['key']),
+      value: serializer.fromJson<String>(json['value']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'key': serializer.toJson<String>(key),
+      'value': serializer.toJson<String>(value),
+    };
+  }
+
+  Setting copyWith({String? key, String? value}) =>
+      Setting(key: key ?? this.key, value: value ?? this.value);
+  Setting copyWithCompanion(SettingsCompanion data) {
+    return Setting(
+      key: data.key.present ? data.key.value : this.key,
+      value: data.value.present ? data.value.value : this.value,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Setting(')
+          ..write('key: $key, ')
+          ..write('value: $value')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(key, value);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Setting && other.key == this.key && other.value == this.value);
+}
+
+class SettingsCompanion extends UpdateCompanion<Setting> {
+  final Value<String> key;
+  final Value<String> value;
+  final Value<int> rowid;
+  const SettingsCompanion({
+    this.key = const Value.absent(),
+    this.value = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  SettingsCompanion.insert({
+    required String key,
+    required String value,
+    this.rowid = const Value.absent(),
+  }) : key = Value(key),
+       value = Value(value);
+  static Insertable<Setting> custom({
+    Expression<String>? key,
+    Expression<String>? value,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (key != null) 'key': key,
+      if (value != null) 'value': value,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  SettingsCompanion copyWith({
+    Value<String>? key,
+    Value<String>? value,
+    Value<int>? rowid,
+  }) {
+    return SettingsCompanion(
+      key: key ?? this.key,
+      value: value ?? this.value,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (key.present) {
+      map['key'] = Variable<String>(key.value);
+    }
+    if (value.present) {
+      map['value'] = Variable<String>(value.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SettingsCompanion(')
+          ..write('key: $key, ')
+          ..write('value: $value, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -943,17 +1309,23 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $PeersTable peers = $PeersTable(this);
   late final $MessagesTable messages = $MessagesTable(this);
+  late final $SettingsTable settings = $SettingsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
-  List<DatabaseSchemaEntity> get allSchemaEntities => [peers, messages];
+  List<DatabaseSchemaEntity> get allSchemaEntities => [
+    peers,
+    messages,
+    settings,
+  ];
 }
 
 typedef $$PeersTableCreateCompanionBuilder =
     PeersCompanion Function({
       required String id,
       Value<String?> displayName,
+      Value<String?> nickname,
       required Uint8List identityPublicKey,
       required Uint8List boxPublicKey,
       Value<int?> lastSeenMs,
@@ -963,6 +1335,7 @@ typedef $$PeersTableUpdateCompanionBuilder =
     PeersCompanion Function({
       Value<String> id,
       Value<String?> displayName,
+      Value<String?> nickname,
       Value<Uint8List> identityPublicKey,
       Value<Uint8List> boxPublicKey,
       Value<int?> lastSeenMs,
@@ -1008,6 +1381,11 @@ class $$PeersTableFilterComposer extends Composer<_$AppDatabase, $PeersTable> {
 
   ColumnFilters<String> get displayName => $composableBuilder(
     column: $table.displayName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get nickname => $composableBuilder(
+    column: $table.nickname,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1071,6 +1449,11 @@ class $$PeersTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get nickname => $composableBuilder(
+    column: $table.nickname,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<Uint8List> get identityPublicKey => $composableBuilder(
     column: $table.identityPublicKey,
     builder: (column) => ColumnOrderings(column),
@@ -1103,6 +1486,9 @@ class $$PeersTableAnnotationComposer
     column: $table.displayName,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get nickname =>
+      $composableBuilder(column: $table.nickname, builder: (column) => column);
 
   GeneratedColumn<Uint8List> get identityPublicKey => $composableBuilder(
     column: $table.identityPublicKey,
@@ -1175,6 +1561,7 @@ class $$PeersTableTableManager
               ({
                 Value<String> id = const Value.absent(),
                 Value<String?> displayName = const Value.absent(),
+                Value<String?> nickname = const Value.absent(),
                 Value<Uint8List> identityPublicKey = const Value.absent(),
                 Value<Uint8List> boxPublicKey = const Value.absent(),
                 Value<int?> lastSeenMs = const Value.absent(),
@@ -1182,6 +1569,7 @@ class $$PeersTableTableManager
               }) => PeersCompanion(
                 id: id,
                 displayName: displayName,
+                nickname: nickname,
                 identityPublicKey: identityPublicKey,
                 boxPublicKey: boxPublicKey,
                 lastSeenMs: lastSeenMs,
@@ -1191,6 +1579,7 @@ class $$PeersTableTableManager
               ({
                 required String id,
                 Value<String?> displayName = const Value.absent(),
+                Value<String?> nickname = const Value.absent(),
                 required Uint8List identityPublicKey,
                 required Uint8List boxPublicKey,
                 Value<int?> lastSeenMs = const Value.absent(),
@@ -1198,6 +1587,7 @@ class $$PeersTableTableManager
               }) => PeersCompanion.insert(
                 id: id,
                 displayName: displayName,
+                nickname: nickname,
                 identityPublicKey: identityPublicKey,
                 boxPublicKey: boxPublicKey,
                 lastSeenMs: lastSeenMs,
@@ -1254,10 +1644,12 @@ typedef $$MessagesTableCreateCompanionBuilder =
       required String messageId,
       required String peerId,
       required MessageDirection direction,
+      Value<MessageKind> kind,
       required String body,
       required int timestampMs,
       required MessageDeliveryState state,
       required int createdAtMs,
+      Value<Uint8List?> mediaBytes,
       Value<Uint8List?> envelope,
       Value<int> rowid,
     });
@@ -1266,10 +1658,12 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<String> messageId,
       Value<String> peerId,
       Value<MessageDirection> direction,
+      Value<MessageKind> kind,
       Value<String> body,
       Value<int> timestampMs,
       Value<MessageDeliveryState> state,
       Value<int> createdAtMs,
+      Value<Uint8List?> mediaBytes,
       Value<Uint8List?> envelope,
       Value<int> rowid,
     });
@@ -1317,6 +1711,12 @@ class $$MessagesTableFilterComposer
     builder: (column) => ColumnWithTypeConverterFilters(column),
   );
 
+  ColumnWithTypeConverterFilters<MessageKind, MessageKind, int> get kind =>
+      $composableBuilder(
+        column: $table.kind,
+        builder: (column) => ColumnWithTypeConverterFilters(column),
+      );
+
   ColumnFilters<String> get body => $composableBuilder(
     column: $table.body,
     builder: (column) => ColumnFilters(column),
@@ -1339,6 +1739,11 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<int> get createdAtMs => $composableBuilder(
     column: $table.createdAtMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<Uint8List> get mediaBytes => $composableBuilder(
+    column: $table.mediaBytes,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1390,6 +1795,11 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get body => $composableBuilder(
     column: $table.body,
     builder: (column) => ColumnOrderings(column),
@@ -1407,6 +1817,11 @@ class $$MessagesTableOrderingComposer
 
   ColumnOrderings<int> get createdAtMs => $composableBuilder(
     column: $table.createdAtMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<Uint8List> get mediaBytes => $composableBuilder(
+    column: $table.mediaBytes,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -1454,6 +1869,9 @@ class $$MessagesTableAnnotationComposer
   GeneratedColumnWithTypeConverter<MessageDirection, int> get direction =>
       $composableBuilder(column: $table.direction, builder: (column) => column);
 
+  GeneratedColumnWithTypeConverter<MessageKind, int> get kind =>
+      $composableBuilder(column: $table.kind, builder: (column) => column);
+
   GeneratedColumn<String> get body =>
       $composableBuilder(column: $table.body, builder: (column) => column);
 
@@ -1467,6 +1885,11 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<int> get createdAtMs => $composableBuilder(
     column: $table.createdAtMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<Uint8List> get mediaBytes => $composableBuilder(
+    column: $table.mediaBytes,
     builder: (column) => column,
   );
 
@@ -1528,20 +1951,24 @@ class $$MessagesTableTableManager
                 Value<String> messageId = const Value.absent(),
                 Value<String> peerId = const Value.absent(),
                 Value<MessageDirection> direction = const Value.absent(),
+                Value<MessageKind> kind = const Value.absent(),
                 Value<String> body = const Value.absent(),
                 Value<int> timestampMs = const Value.absent(),
                 Value<MessageDeliveryState> state = const Value.absent(),
                 Value<int> createdAtMs = const Value.absent(),
+                Value<Uint8List?> mediaBytes = const Value.absent(),
                 Value<Uint8List?> envelope = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion(
                 messageId: messageId,
                 peerId: peerId,
                 direction: direction,
+                kind: kind,
                 body: body,
                 timestampMs: timestampMs,
                 state: state,
                 createdAtMs: createdAtMs,
+                mediaBytes: mediaBytes,
                 envelope: envelope,
                 rowid: rowid,
               ),
@@ -1550,20 +1977,24 @@ class $$MessagesTableTableManager
                 required String messageId,
                 required String peerId,
                 required MessageDirection direction,
+                Value<MessageKind> kind = const Value.absent(),
                 required String body,
                 required int timestampMs,
                 required MessageDeliveryState state,
                 required int createdAtMs,
+                Value<Uint8List?> mediaBytes = const Value.absent(),
                 Value<Uint8List?> envelope = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion.insert(
                 messageId: messageId,
                 peerId: peerId,
                 direction: direction,
+                kind: kind,
                 body: body,
                 timestampMs: timestampMs,
                 state: state,
                 createdAtMs: createdAtMs,
+                mediaBytes: mediaBytes,
                 envelope: envelope,
                 rowid: rowid,
               ),
@@ -1634,6 +2065,139 @@ typedef $$MessagesTableProcessedTableManager =
       Message,
       PrefetchHooks Function({bool peerId})
     >;
+typedef $$SettingsTableCreateCompanionBuilder =
+    SettingsCompanion Function({
+      required String key,
+      required String value,
+      Value<int> rowid,
+    });
+typedef $$SettingsTableUpdateCompanionBuilder =
+    SettingsCompanion Function({
+      Value<String> key,
+      Value<String> value,
+      Value<int> rowid,
+    });
+
+class $$SettingsTableFilterComposer
+    extends Composer<_$AppDatabase, $SettingsTable> {
+  $$SettingsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get key => $composableBuilder(
+    column: $table.key,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get value => $composableBuilder(
+    column: $table.value,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$SettingsTableOrderingComposer
+    extends Composer<_$AppDatabase, $SettingsTable> {
+  $$SettingsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get key => $composableBuilder(
+    column: $table.key,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get value => $composableBuilder(
+    column: $table.value,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$SettingsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SettingsTable> {
+  $$SettingsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get key =>
+      $composableBuilder(column: $table.key, builder: (column) => column);
+
+  GeneratedColumn<String> get value =>
+      $composableBuilder(column: $table.value, builder: (column) => column);
+}
+
+class $$SettingsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $SettingsTable,
+          Setting,
+          $$SettingsTableFilterComposer,
+          $$SettingsTableOrderingComposer,
+          $$SettingsTableAnnotationComposer,
+          $$SettingsTableCreateCompanionBuilder,
+          $$SettingsTableUpdateCompanionBuilder,
+          (Setting, BaseReferences<_$AppDatabase, $SettingsTable, Setting>),
+          Setting,
+          PrefetchHooks Function()
+        > {
+  $$SettingsTableTableManager(_$AppDatabase db, $SettingsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SettingsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SettingsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SettingsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> key = const Value.absent(),
+                Value<String> value = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => SettingsCompanion(key: key, value: value, rowid: rowid),
+          createCompanionCallback:
+              ({
+                required String key,
+                required String value,
+                Value<int> rowid = const Value.absent(),
+              }) => SettingsCompanion.insert(
+                key: key,
+                value: value,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$SettingsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $SettingsTable,
+      Setting,
+      $$SettingsTableFilterComposer,
+      $$SettingsTableOrderingComposer,
+      $$SettingsTableAnnotationComposer,
+      $$SettingsTableCreateCompanionBuilder,
+      $$SettingsTableUpdateCompanionBuilder,
+      (Setting, BaseReferences<_$AppDatabase, $SettingsTable, Setting>),
+      Setting,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -1642,4 +2206,6 @@ class $AppDatabaseManager {
       $$PeersTableTableManager(_db, _db.peers);
   $$MessagesTableTableManager get messages =>
       $$MessagesTableTableManager(_db, _db.messages);
+  $$SettingsTableTableManager get settings =>
+      $$SettingsTableTableManager(_db, _db.settings);
 }

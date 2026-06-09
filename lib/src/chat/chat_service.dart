@@ -78,7 +78,12 @@ class ChatService {
   final Map<String, DateTime> _lastAttempt = {};
   Timer? _retryTimer;
 
+  /// The name this device announces to peers (a boxed `announceName` envelope).
+  /// Defaults to a generic label until the user sets their own in settings.
+  String _myName = 'stonechat';
+
   Future<void> start({required String displayName}) async {
+    _myName = displayName;
     await _api.configure(TransportConfig(
       serviceUuid: serviceUuid,
       characteristicUuid: characteristicUuid,
@@ -91,6 +96,19 @@ class ChatService {
     await _api.startAdvertising();
     await _api.startScanning();
     await drainInbox();
+  }
+
+  /// Updates the name announced to peers and re-announces to everyone currently
+  /// connected. Persisting it is the caller's job (see settings).
+  Future<void> updateMyName(String name) async {
+    _myName = name;
+    for (final identityHex in onlineIdentities.value) {
+      final connectionId = _connectionByIdentity[identityHex];
+      final keys = _keysByIdentity[identityHex];
+      if (connectionId != null && keys != null) {
+        await _announceNameTo(connectionId, keys);
+      }
+    }
   }
 
   /// Resolves a peer's public keys, falling back from the in-memory cache to
@@ -172,10 +190,17 @@ class ChatService {
     switch (env.type) {
       case EnvelopeType.hello:
         await _onHello(env, identityHex);
+      case EnvelopeType.announceName:
+        await _onAnnounceName(env, identityHex);
       case EnvelopeType.ack:
         await _onAck(env, identityHex);
+      case EnvelopeType.read:
+        await _onRead(env, identityHex);
       case EnvelopeType.message:
         await _onMessage(connectionId, env, identityHex);
+      case EnvelopeType.image:
+        // Photo messages arrive in a later build; ignore for forward-compat.
+        break;
       case EnvelopeType.fragmentStart:
       case EnvelopeType.fragmentCont:
       case EnvelopeType.fragmentEnd:
@@ -195,10 +220,12 @@ class ChatService {
         boxPublicKey: Value(keys.boxPublicKey),
         lastSeenMs: Value(DateTime.now().millisecondsSinceEpoch),
       ));
-      unawaited(_api.cachePeerName(identityHex, _labelFor(identityHex)));
+      await _refreshPeerNameCache(identityHex);
       _setOnline(identityHex, true);
       final connectionId = _connectionByIdentity[identityHex];
       if (connectionId != null) {
+        // We now hold the peer's box key, so we can announce our name to them.
+        await _announceNameTo(connectionId, keys);
         await _flushOutbox(identityHex, connectionId, respectBackoff: false);
       }
     } on SignatureVerificationException {
@@ -206,8 +233,41 @@ class ChatService {
     }
   }
 
-  /// Short human label for a peer (until peers gain user-set display names).
-  String _labelFor(String identityHex) => 'Peer ${identityHex.substring(0, 8)}';
+  /// Sends our chosen display name to a peer (boxed). Best-effort.
+  Future<void> _announceNameTo(String connectionId, PeerKeys keys) async {
+    final env = crypto.seal(
+      type: EnvelopeType.announceName,
+      plaintext: Uint8List.fromList(utf8.encode(_myName)),
+      recipient: keys,
+    );
+    await _api.sendEnvelope(connectionId, env.toBytes());
+  }
+
+  Future<void> _onAnnounceName(Envelope env, String identityHex) async {
+    final keys = await _resolvePeerKeys(identityHex);
+    if (keys == null) return;
+    try {
+      final name = utf8.decode(crypto.open(env, sender: keys)).trim();
+      if (name.isEmpty) return;
+      await db.setPeerDisplayName(identityHex, name);
+      await _refreshPeerNameCache(identityHex);
+    } on SignatureVerificationException {
+      // ignore
+    } on FormatException {
+      // Non-UTF8 payload — ignore.
+    }
+  }
+
+  /// Pushes the peer's resolved label (nickname → announced name → "Peer XXXX")
+  /// into the native name cache, so background notifications show a real name.
+  Future<void> _refreshPeerNameCache(String identityHex) async {
+    final peer = await db.peerById(identityHex);
+    unawaited(_api.cachePeerName(identityHex, peerLabelFor(peer, identityHex)));
+  }
+
+  /// Re-pushes a peer's label after a local nickname change (UI hook).
+  Future<void> refreshPeerName(String identityHex) =>
+      _refreshPeerNameCache(identityHex);
 
   Future<void> _onAck(Envelope env, String identityHex) async {
     final keys = await _resolvePeerKeys(identityHex);
@@ -220,6 +280,51 @@ class ChatService {
     } on SignatureVerificationException {
       // ignore
     }
+  }
+
+  /// A read receipt: the peer opened the conversation and read our message. The
+  /// payload is the original message_id; we promote it from `acked` to `seen`.
+  /// Never downgrade a later state, so only `received`/`sent`/`acked` advance.
+  Future<void> _onRead(Envelope env, String identityHex) async {
+    final keys = await _resolvePeerKeys(identityHex);
+    if (keys == null) return;
+    try {
+      final referencedHex = hex(crypto.open(env, sender: keys));
+      await db.markState(referencedHex, MessageDeliveryState.seen);
+      _clearBackoff(referencedHex);
+    } on SignatureVerificationException {
+      // ignore
+    }
+  }
+
+  /// Call when the user is viewing a conversation: send a read receipt for each
+  /// inbound message not yet acknowledged as read, and record locally (state
+  /// `seen`) that we've done so, so we don't re-send receipts endlessly.
+  Future<void> markConversationRead(String identityHex) async {
+    final connectionId = _connectionByIdentity[identityHex];
+    final keys = _keysByIdentity[identityHex] ??
+        await _resolvePeerKeys(identityHex);
+    final pending = await db.inboundAwaitingReceipt(identityHex);
+    for (final message in pending) {
+      // Always mark locally read; only emit a receipt if we can reach the peer.
+      await db.markState(message.messageId, MessageDeliveryState.seen);
+      if (connectionId == null || keys == null) continue;
+      final receipt = crypto.seal(
+        type: EnvelopeType.read,
+        plaintext: _messageIdBytes(message.messageId),
+        recipient: keys,
+      );
+      await _api.sendEnvelope(connectionId, receipt.toBytes());
+    }
+  }
+
+  /// Decodes a 32-hex-char message id back to its 16 raw bytes.
+  Uint8List _messageIdBytes(String messageIdHex) {
+    final out = Uint8List(Envelope.messageIdLen);
+    for (var i = 0; i < out.length; i++) {
+      out[i] = int.parse(messageIdHex.substring(i * 2, i * 2 + 2), radix: 16);
+    }
+    return out;
   }
 
   Future<void> _onMessage(
@@ -397,10 +502,12 @@ class ChatService {
             boxPublicKey: Value(keys.boxPublicKey),
             lastSeenMs: Value(DateTime.now().millisecondsSinceEpoch),
           ));
-          unawaited(_api.cachePeerName(identityHex, _labelFor(identityHex)));
+          await _refreshPeerNameCache(identityHex);
         } on SignatureVerificationException {
           // forged — ignore
         }
+      case EnvelopeType.announceName:
+        await _onAnnounceName(env, identityHex);
       case EnvelopeType.message:
         final keys = await _resolvePeerKeys(identityHex);
         if (keys == null) return;
@@ -422,6 +529,11 @@ class ChatService {
         }
       case EnvelopeType.ack:
         await _onAck(env, identityHex);
+      case EnvelopeType.read:
+        await _onRead(env, identityHex);
+      case EnvelopeType.image:
+        // Photo messages arrive in a later build; ignore for forward-compat.
+        break;
       case EnvelopeType.fragmentStart:
       case EnvelopeType.fragmentCont:
       case EnvelopeType.fragmentEnd:

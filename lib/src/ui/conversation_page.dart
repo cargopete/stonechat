@@ -1,8 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../chat/chat_service.dart';
 import '../data/database.dart';
-import 'home_page.dart' show peerLabel;
 
 class ConversationPage extends StatefulWidget {
   const ConversationPage({
@@ -23,9 +24,22 @@ class ConversationPage extends StatefulWidget {
 class _ConversationPageState extends State<ConversationPage> {
   final TextEditingController _controller = TextEditingController();
   bool _sending = false;
+  StreamSubscription<List<Message>>? _readSub;
+
+  @override
+  void initState() {
+    super.initState();
+    // Send a read receipt now, and again whenever new messages land while the
+    // thread is open (so the peer sees "seen" in near-real-time).
+    unawaited(widget.service.markConversationRead(widget.peer.id));
+    _readSub = widget.db.watchConversation(widget.peer.id).listen((_) {
+      unawaited(widget.service.markConversationRead(widget.peer.id));
+    });
+  }
 
   @override
   void dispose() {
+    _readSub?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -48,24 +62,78 @@ class _ConversationPageState extends State<ConversationPage> {
     }
   }
 
+  Future<void> _rename(Peer peer) async {
+    final controller = TextEditingController(text: peer.nickname ?? '');
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Nickname'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            hintText: 'A name just for you',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result == null) return;
+    await widget.db.setPeerNickname(peer.id, result.isEmpty ? null : result);
+    await widget.service.refreshPeerName(peer.id);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: ValueListenableBuilder<Set<String>>(
-          valueListenable: widget.service.onlineIdentities,
-          builder: (context, online, _) {
-            final isOnline = online.contains(widget.peer.id);
-            return Row(
-              children: [
-                Icon(Icons.circle,
-                    size: 12, color: isOnline ? Colors.green : Colors.grey),
-                const SizedBox(width: 8),
-                Text(peerLabel(widget.peer)),
-              ],
+        title: StreamBuilder<Peer?>(
+          stream: widget.db.watchPeer(widget.peer.id),
+          initialData: widget.peer,
+          builder: (context, peerSnap) {
+            final peer = peerSnap.data ?? widget.peer;
+            return ValueListenableBuilder<Set<String>>(
+              valueListenable: widget.service.onlineIdentities,
+              builder: (context, online, _) {
+                final isOnline = online.contains(widget.peer.id);
+                return Row(
+                  children: [
+                    Icon(Icons.circle,
+                        size: 12, color: isOnline ? Colors.green : Colors.grey),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        peerLabelFor(peer, widget.peer.id),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                );
+              },
             );
           },
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Set nickname',
+            icon: const Icon(Icons.drive_file_rename_outline),
+            onPressed: () async {
+              final peer = await widget.db.peerById(widget.peer.id);
+              if (peer != null) await _rename(peer);
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -125,7 +193,7 @@ class _MessageBubble extends StatelessWidget {
               isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
             Text(message.body),
-            if (isMine)
+            if (isMine && _stateLabel(message.state).isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
@@ -143,6 +211,7 @@ class _MessageBubble extends StatelessWidget {
         MessageDeliveryState.queued => 'queued',
         MessageDeliveryState.sent => 'sent',
         MessageDeliveryState.acked => 'delivered',
+        MessageDeliveryState.seen => 'seen',
         MessageDeliveryState.failed => 'failed',
         MessageDeliveryState.received => '',
       };

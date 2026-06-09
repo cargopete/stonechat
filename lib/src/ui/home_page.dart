@@ -5,9 +5,9 @@ import '../data/database.dart';
 import '../transport/transport_api.g.dart';
 import 'conversation_page.dart';
 
-/// A short, human-ish label for a peer identity (hex) when it has no name.
-String peerLabel(Peer peer) =>
-    peer.displayName ?? 'Peer ${peer.id.substring(0, 8)}';
+/// A short, human-ish label for a peer: their nickname, else announced name,
+/// else "Peer XXXX".
+String peerLabel(Peer peer) => peerLabelFor(peer, peer.id);
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key, required this.service, required this.db});
@@ -43,10 +43,58 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _editMyName() async {
+    final current = await db.getSetting('myDisplayName') ?? '';
+    if (!mounted) return;
+    final controller = TextEditingController(text: current);
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Your name'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            hintText: 'What nearby people see',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result == null || result.isEmpty) return;
+    await db.setSetting('myDisplayName', result);
+    await service.updateMyName(result);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('You\'ll show up as "$result"')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('stonechat')),
+      appBar: AppBar(
+        title: const Text('stonechat'),
+        actions: [
+          IconButton(
+            tooltip: 'Your name',
+            icon: const Icon(Icons.badge_outlined),
+            onPressed: _editMyName,
+          ),
+        ],
+      ),
       body: Column(
         children: [
           _AdapterBanner(service: service),
@@ -71,7 +119,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           leading: _PresenceDot(online: isOnline),
                           title: Text(peerLabel(peer)),
                           subtitle: Text(
-                            peer.id.substring(0, 16),
+                            peer.id.substring(0, peer.id.length.clamp(0, 16)),
                             style: const TextStyle(
                               fontFamily: 'monospace',
                               fontSize: 12,

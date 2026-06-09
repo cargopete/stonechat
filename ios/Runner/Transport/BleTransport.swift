@@ -1,6 +1,7 @@
 import CoreBluetooth
 import Flutter
 import Foundation
+import UIKit
 import UserNotifications
 
 /// Fixed app-level identifiers. These are compile-time constants (not supplied
@@ -57,8 +58,12 @@ final class BleTransport: NSObject {
   func attach(messenger: FlutterBinaryMessenger) {
     TransportHostApiSetup.setUp(binaryMessenger: messenger, api: self)
     StreamTransportEventsStreamHandler.register(with: messenger, streamHandler: events)
-    UNUserNotificationCenter.current()
-      .requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    // Suppress the notification prompt under the screenshot harness so it never
+    // photobombs a captured screen. Never set in a real build.
+    if ProcessInfo.processInfo.environment["SCREENSHOT"] == nil {
+      UNUserNotificationCenter.current()
+        .requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
     ensureManagers()
   }
 
@@ -129,12 +134,16 @@ final class BleTransport: NSObject {
       envelope: FlutterStandardTypedData(bytes: envelope),
       receivedAtMs: Int64(Date().timeIntervalSince1970 * 1000)
     )
+    // Hand the envelope to Dart if it's listening (foreground), otherwise stash
+    // it in the inbox for the next drain. EITHER way, alert the user if the app
+    // isn't on screen — the previous code only notified when no Dart listener
+    // existed, so a backgrounded-but-alive app stayed silent (the actual bug).
     if events.hasListener {
       events.emit(event)
     } else {
       persistForLater(envelope, from: peerId)
-      fireLocalNotification(for: envelope)
     }
+    maybeNotify(for: envelope)
   }
 
   /// Background path: drop the envelope into the App Group inbox for Dart to
@@ -143,14 +152,34 @@ final class BleTransport: NSObject {
     EnvelopeInbox.write(envelope)
   }
 
-  private func fireLocalNotification(for envelope: Data) {
-    let content = UNMutableNotificationContent()
-    content.title = senderName(from: envelope)
-    content.body = "New message"
-    content.sound = .default
-    let request = UNNotificationRequest(
-      identifier: UUID().uuidString, content: content, trigger: nil)
-    UNUserNotificationCenter.current().add(request)
+  /// Posts a local notification for an inbound message when the app is not in
+  /// the foreground. Only user-visible messages/photos qualify (acks, reads,
+  /// hellos and name announcements stay silent), and only if the user actually
+  /// granted notification permission.
+  private func maybeNotify(for envelope: Data) {
+    guard envelope.count > 1 else { return }
+    let type = envelope[envelope.startIndex + 1]  // version(1) | type(1) | …
+    guard type == 0 || type == 8 else { return }  // 0 = message, 8 = image
+    let title = senderName(from: envelope)
+    let body = type == 8 ? "Sent a photo" : "New message"
+    DispatchQueue.main.async {
+      // The foreground UI shows messages live, so only alert when backgrounded.
+      if UIApplication.shared.applicationState == .active { return }
+      let center = UNUserNotificationCenter.current()
+      center.getNotificationSettings { settings in
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+          let content = UNMutableNotificationContent()
+          content.title = title
+          content.body = body
+          content.sound = .default
+          center.add(UNNotificationRequest(
+            identifier: UUID().uuidString, content: content, trigger: nil))
+        default:
+          break  // Permission not granted — nothing we can do.
+        }
+      }
+    }
   }
 
   /// Best-effort sender label from the cleartext envelope header. Layout:
