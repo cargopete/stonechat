@@ -197,10 +197,8 @@ class ChatService {
       case EnvelopeType.read:
         await _onRead(env, identityHex);
       case EnvelopeType.message:
-        await _onMessage(connectionId, env, identityHex);
       case EnvelopeType.image:
-        // Photo messages arrive in a later build; ignore for forward-compat.
-        break;
+        await _onMessage(connectionId, env, identityHex);
       case EnvelopeType.fragmentStart:
       case EnvelopeType.fragmentCont:
       case EnvelopeType.fragmentEnd:
@@ -342,11 +340,14 @@ class ChatService {
 
     try {
       final plaintext = crypto.open(env, sender: keys);
+      final isImage = env.type == EnvelopeType.image;
       await db.insertMessage(MessagesCompanion(
         messageId: Value(messageIdHex),
         peerId: Value(identityHex),
         direction: Value(MessageDirection.inbound),
-        body: Value(utf8.decode(plaintext)),
+        kind: Value(isImage ? MessageKind.image : MessageKind.text),
+        body: Value(isImage ? '' : utf8.decode(plaintext)),
+        mediaBytes: Value(isImage ? plaintext : null),
         timestampMs: Value(env.timestampMs),
         state: Value(MessageDeliveryState.received),
         createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
@@ -389,6 +390,44 @@ class ChatService {
       peerId: Value(identityHex),
       direction: Value(MessageDirection.outbound),
       body: Value(text),
+      timestampMs: Value(env.timestampMs),
+      state: Value(MessageDeliveryState.queued),
+      createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
+      envelope: Value(env.toBytes()),
+    ));
+
+    final dispatched = await _api.sendEnvelope(connectionId, env.toBytes());
+    await db.markState(
+      messageIdHex,
+      dispatched ? MessageDeliveryState.sent : MessageDeliveryState.failed,
+    );
+  }
+
+  /// Sends a photo (already-compressed bytes) to a known peer. Goes through the
+  /// same boxed-envelope + outbox path as text, so delivery/read receipts and
+  /// store-and-forward retries work identically; the transport fragments the
+  /// larger payload into BLE frames and reassembles on the far side.
+  Future<void> sendImage(String identityHex, Uint8List imageBytes) async {
+    final keys = _keysByIdentity[identityHex];
+    final connectionId = _connectionByIdentity[identityHex];
+    if (keys == null || connectionId == null) {
+      throw StateError('Peer $identityHex is not connected / not handshaked');
+    }
+
+    final env = crypto.seal(
+      type: EnvelopeType.image,
+      plaintext: imageBytes,
+      recipient: keys,
+    );
+    final messageIdHex = hex(env.messageId);
+
+    await db.insertMessage(MessagesCompanion(
+      messageId: Value(messageIdHex),
+      peerId: Value(identityHex),
+      direction: Value(MessageDirection.outbound),
+      kind: Value(MessageKind.image),
+      body: Value(''),
+      mediaBytes: Value(imageBytes),
       timestampMs: Value(env.timestampMs),
       state: Value(MessageDeliveryState.queued),
       createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
@@ -509,17 +548,21 @@ class ChatService {
       case EnvelopeType.announceName:
         await _onAnnounceName(env, identityHex);
       case EnvelopeType.message:
+      case EnvelopeType.image:
         final keys = await _resolvePeerKeys(identityHex);
         if (keys == null) return;
         final messageIdHex = hex(env.messageId);
         if (await db.hasMessage(messageIdHex)) return;
         try {
           final plaintext = crypto.open(env, sender: keys);
+          final isImage = env.type == EnvelopeType.image;
           await db.insertMessage(MessagesCompanion(
             messageId: Value(messageIdHex),
             peerId: Value(identityHex),
             direction: Value(MessageDirection.inbound),
-            body: Value(utf8.decode(plaintext)),
+            kind: Value(isImage ? MessageKind.image : MessageKind.text),
+            body: Value(isImage ? '' : utf8.decode(plaintext)),
+            mediaBytes: Value(isImage ? plaintext : null),
             timestampMs: Value(env.timestampMs),
             state: Value(MessageDeliveryState.received),
             createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
@@ -531,9 +574,6 @@ class ChatService {
         await _onAck(env, identityHex);
       case EnvelopeType.read:
         await _onRead(env, identityHex);
-      case EnvelopeType.image:
-        // Photo messages arrive in a later build; ignore for forward-compat.
-        break;
       case EnvelopeType.fragmentStart:
       case EnvelopeType.fragmentCont:
       case EnvelopeType.fragmentEnd:

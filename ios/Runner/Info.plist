@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>stonechat uses Bluetooth to discover nearby devices and exchange messages directly, with no servers and no internet.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>stonechat needs access to your photos so you can send one to a nearby device. Photos stay on the two phones — nothing is uploaded.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../chat/chat_service.dart';
 import '../data/database.dart';
@@ -55,6 +56,32 @@ class _ConversationPageState extends State<ConversationPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not send: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<void> _sendImage() async {
+    if (_sending) return;
+    try {
+      // Compress hard — Bluetooth throughput is low, so keep photos small.
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 40,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      setState(() => _sending = true);
+      await widget.service.sendImage(widget.peer.id, bytes);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not send photo: $error')),
         );
       }
     } finally {
@@ -162,6 +189,7 @@ class _ConversationPageState extends State<ConversationPage> {
             controller: _controller,
             sending: _sending,
             onSend: _send,
+            onAttach: _sendImage,
           ),
         ],
       ),
@@ -192,7 +220,19 @@ class _MessageBubble extends StatelessWidget {
           crossAxisAlignment:
               isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            Text(message.body),
+            if (message.kind == MessageKind.image && message.mediaBytes != null)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.memory(message.mediaBytes!, fit: BoxFit.cover),
+              )
+            else if (message.kind == MessageKind.image)
+              // Inbound image still arriving (frames not all reassembled yet).
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+                child: Icon(Icons.image_outlined),
+              )
+            else
+              Text(message.body),
             if (isMine && _stateLabel(message.state).isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
@@ -222,11 +262,13 @@ class _Composer extends StatelessWidget {
     required this.controller,
     required this.sending,
     required this.onSend,
+    required this.onAttach,
   });
 
   final TextEditingController controller;
   final bool sending;
   final Future<void> Function() onSend;
+  final Future<void> Function() onAttach;
 
   @override
   Widget build(BuildContext context) {
@@ -236,6 +278,11 @@ class _Composer extends StatelessWidget {
         padding: const EdgeInsets.all(8),
         child: Row(
           children: [
+            IconButton(
+              tooltip: 'Send a photo',
+              onPressed: sending ? null : onAttach,
+              icon: const Icon(Icons.photo_outlined),
+            ),
             Expanded(
               child: TextField(
                 controller: controller,

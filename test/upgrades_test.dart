@@ -141,5 +141,24 @@ void main() {
       final pending = await db.pendingFor(peerId);
       expect(pending.map((m) => m.messageId).toSet(), {'queued', 'sent'});
     });
+
+    test('image message stores kind + media bytes intact', () async {
+      final bytes = Uint8List.fromList(List<int>.generate(512, (i) => i % 256));
+      await db.insertMessage(MessagesCompanion(
+        messageId: const Value('img'),
+        peerId: const Value(peerId),
+        direction: const Value(MessageDirection.inbound),
+        kind: const Value(MessageKind.image),
+        body: const Value(''),
+        mediaBytes: Value(bytes),
+        timestampMs: const Value(1),
+        state: const Value(MessageDeliveryState.received),
+        createdAtMs: const Value(1),
+      ));
+      final msg = (await db.watchConversation(peerId).first).single;
+      expect(msg.kind, MessageKind.image);
+      expect(msg.mediaBytes, bytes);
+      expect(msg.body, '');
+    });
   });
 }
