@@ -38,8 +38,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Reconcile anything the native side received while we were backgrounded.
-      service.drainInbox();
+      // Coming back to the foreground: restart scan/advertise, re-arm reconnects
+      // to known peers, drain the inbox and flush the outbox.
+      service.resume();
     }
   }
 
@@ -88,6 +89,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       appBar: AppBar(
         title: const Text('stonechat'),
         actions: [
+          IconButton(
+            tooltip: 'Reconnect',
+            icon: const Icon(Icons.refresh),
+            onPressed: () {
+              service.resume();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Reconnecting to nearby devices…'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+          ),
           IconButton(
             tooltip: 'Your name',
             icon: const Icon(Icons.badge_outlined),

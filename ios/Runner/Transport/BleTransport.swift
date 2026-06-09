@@ -236,6 +236,27 @@ extension BleTransport: TransportHostApi {
   func startScanning() throws {
     wantsScanning = true
     startScanningIfReady()
+    reconnectKnownPeripherals()
+  }
+
+  /// Re-arms connections to peers we already know about. Called whenever the app
+  /// comes back to the foreground, so a link that died while backgrounded is
+  /// re-established promptly without waiting for a fresh advertisement scan.
+  private func reconnectKnownPeripherals() {
+    guard let central = central, central.state == .poweredOn else { return }
+    // Pick up peripherals iOS still considers connected at the system level.
+    for p in central.retrieveConnectedPeripherals(withServices: [BleConstants.serviceUUID]) {
+      peripherals[p.identifier.uuidString] = p
+      p.delegate = self
+    }
+    // Re-issue a pending connect for every known peer not already wired up.
+    for (id, p) in peripherals where remoteCharacteristics[id] == nil {
+      central.connect(p, options: [
+        CBConnectPeripheralOptionNotifyOnConnectionKey: true,
+        CBConnectPeripheralOptionNotifyOnDisconnectionKey: true,
+        CBConnectPeripheralOptionNotifyOnNotificationKey: true,
+      ])
+    }
   }
 
   func stopScanning() throws {

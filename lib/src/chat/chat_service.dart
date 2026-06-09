@@ -98,6 +98,19 @@ class ChatService {
     await drainInbox();
   }
 
+  /// Called when the app returns to the foreground (and from a manual refresh):
+  /// re-kick advertising + scanning — which on the native side also re-arms
+  /// connections to known peers — then reconcile the background inbox and flush
+  /// anything queued to peers that are reachable again. This is the reliable
+  /// recovery path, since iOS heavily throttles background BLE and a link that
+  /// died while both apps were backgrounded only heals once one is foregrounded.
+  Future<void> resume() async {
+    await _api.startAdvertising();
+    await _api.startScanning();
+    await drainInbox();
+    await _retryOutbox();
+  }
+
   /// Updates the name announced to peers and re-announces to everyone currently
   /// connected. Persisting it is the caller's job (see settings).
   Future<void> updateMyName(String name) async {
