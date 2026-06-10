@@ -145,7 +145,8 @@ async fn send(State(state): State<Arc<AppState>>, body: Bytes) -> impl IntoRespo
     // Wake the recipient if we have a push token for them.
     if let Some(apns) = &state.apns {
         if let Ok(Some(token)) = state.store.push_token(&meta.recipient_hex) {
-            apns.wake(&token, now_ms() / 1000).await;
+            let body = if meta.msg_type == 8 { "Sent a photo" } else { "New message" };
+            apns.wake(&token, body, &meta.sender_hex, now_ms() / 1000).await;
         }
     }
     StatusCode::ACCEPTED.into_response()

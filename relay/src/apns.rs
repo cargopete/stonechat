@@ -79,7 +79,13 @@ impl Apns {
     /// Best-effort visible push that also wakes the app to fetch. Logs and
     /// swallows failures — a missed wake just means delivery waits for the next
     /// app open or a Bluetooth meet-up.
-    pub async fn wake(&self, device_token: &str, now_secs: i64) {
+    pub async fn wake(
+        &self,
+        device_token: &str,
+        body: &str,
+        sender_hex: &str,
+        now_secs: i64,
+    ) {
         let jwt = match self.jwt(now_secs) {
             Ok(j) => j,
             Err(e) => {
@@ -88,12 +94,18 @@ impl Apns {
             }
         };
         let url = format!("{}/3/device/{}", self.host, device_token);
-        let body = serde_json::json!({
+        // `mutable-content` lets a Notification Service Extension swap the title
+        // for the real sender name (looked up client-side from `sender`); until
+        // one exists it just shows "stonechat — <body>". `sender` is a public
+        // key, never content.
+        let payload = serde_json::json!({
             "aps": {
-                "alert": { "title": "stonechat", "body": "New message" },
+                "alert": { "title": "stonechat", "body": body },
                 "sound": "default",
+                "mutable-content": 1,
                 "content-available": 1
-            }
+            },
+            "sender": sender_hex
         });
         let res = self
             .client
@@ -102,7 +114,7 @@ impl Apns {
             .header("apns-topic", &self.topic)
             .header("apns-push-type", "alert")
             .header("apns-priority", "10")
-            .json(&body)
+            .json(&payload)
             .send()
             .await;
         match res {

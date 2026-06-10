@@ -18,6 +18,9 @@ pub struct EnvelopeMeta {
     pub message_id_hex: String,
     pub sender_hex: String,
     pub recipient_hex: String,
+    /// Envelope opcode (0 = message, 8 = image, …) — used only to pick the push
+    /// body text; the relay never reads the encrypted content.
+    pub msg_type: u8,
 }
 
 /// Validates an envelope's structure and signature, returning the routing
@@ -48,5 +51,6 @@ pub fn parse_and_verify(bytes: &[u8]) -> Result<EnvelopeMeta, &'static str> {
         message_id_hex: hex::encode(message_id),
         sender_hex: hex::encode(sender_id),
         recipient_hex: hex::encode(recipient_id),
+        msg_type: bytes[1],
     })
 }
