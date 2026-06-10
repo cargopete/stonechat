@@ -229,6 +229,7 @@ class _ConversationPageState extends State<ConversationPage> {
                           reactions: byMessage[m.messageId] ?? const [],
                           onLongPress: () => _openActions(m),
                           onTapImage: () => _openImage(m),
+                          onReply: () => setState(() => _replyingTo = m),
                         );
                       },
                     );
@@ -325,6 +326,7 @@ class _MessageBubble extends StatelessWidget {
     required this.reactions,
     required this.onLongPress,
     required this.onTapImage,
+    required this.onReply,
   });
 
   final Message message;
@@ -332,6 +334,7 @@ class _MessageBubble extends StatelessWidget {
   final List<Reaction> reactions;
   final VoidCallback onLongPress;
   final VoidCallback onTapImage;
+  final VoidCallback onReply;
 
   @override
   Widget build(BuildContext context) {
@@ -382,15 +385,32 @@ class _MessageBubble extends StatelessWidget {
       ),
     );
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 3),
-      child: Column(
-        crossAxisAlignment:
-            isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-        children: [
-          Align(
-            alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-            child: Stack(
+    return Dismissible(
+      key: ValueKey('swipe-${message.messageId}'),
+      direction: DismissDirection.startToEnd,
+      dismissThresholds: const {DismissDirection.startToEnd: 0.26},
+      movementDuration: const Duration(milliseconds: 180),
+      confirmDismiss: (_) async {
+        HapticFeedback.lightImpact();
+        onReply();
+        return false; // snap back; we only use the gesture to start a reply.
+      },
+      background: const Padding(
+        padding: EdgeInsets.only(left: 28),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Icon(Icons.reply_rounded, color: Stone.accent),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 3),
+        child: Column(
+          crossAxisAlignment:
+              isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            Align(
+              alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+              child: Stack(
               clipBehavior: Clip.none,
               children: [
                 Padding(
@@ -416,7 +436,8 @@ class _MessageBubble extends StatelessWidget {
             ),
             child: _MetaLine(message: message, isMine: isMine),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }

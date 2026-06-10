@@ -35,8 +35,14 @@ class ImageViewerPage extends StatelessWidget {
               child: InteractiveViewer(
                 minScale: 1,
                 maxScale: 5,
-                child: Center(
-                  child: Hero(tag: heroTag, child: Image.memory(bytes)),
+                // SizedBox.expand gives the image tight, full-viewport
+                // constraints; BoxFit.contain then scales it to fill while
+                // preserving aspect (without it, a small source renders tiny).
+                child: SizedBox.expand(
+                  child: Hero(
+                    tag: heroTag,
+                    child: Image.memory(bytes, fit: BoxFit.contain),
+                  ),
                 ),
               ),
             ),
