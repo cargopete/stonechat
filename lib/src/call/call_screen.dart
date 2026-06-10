@@ -35,7 +35,10 @@ class _CallHostState extends State<CallHost> {
   }
 
   void _sync() {
-    final inCall = widget.manager.inCall;
+    // Incoming calls ring through CallKit's native UI; our screen takes over
+    // only once the call is outgoing or has been answered.
+    final inCall = widget.manager.inCall &&
+        widget.manager.state != CallState.incoming;
     if (inCall && !_showing) {
       _showing = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {

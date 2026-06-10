@@ -127,4 +127,53 @@ impl Apns {
             Err(e) => tracing::warn!("apns push error: {e}"),
         }
     }
+
+    /// PushKit (VoIP) push — the only kind iOS will deliver to a killed app and
+    /// let it ring via CallKit. Goes to the `<topic>.voip` topic with the `voip`
+    /// push type. The payload carries only routing data the relay already knows
+    /// (a call id and the caller's public key); the real nickname is filled in
+    /// client-side, so the server still never learns who's who.
+    pub async fn wake_voip(
+        &self,
+        voip_token: &str,
+        call_uuid: &str,
+        sender_hex: &str,
+        now_secs: i64,
+    ) {
+        let jwt = match self.jwt(now_secs) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::warn!("apns voip jwt mint failed: {e}");
+                return;
+            }
+        };
+        let url = format!("{}/3/device/{}", self.host, voip_token);
+        let payload = serde_json::json!({
+            "aps": {},
+            "uuid": call_uuid,
+            "sender": sender_hex,
+            "nameCaller": "stonechat",
+            "handle": sender_hex,
+            "hasVideo": false
+        });
+        let res = self
+            .client
+            .post(&url)
+            .header("authorization", format!("bearer {jwt}"))
+            .header("apns-topic", format!("{}.voip", self.topic))
+            .header("apns-push-type", "voip")
+            .header("apns-priority", "10")
+            .json(&payload)
+            .send()
+            .await;
+        match res {
+            Ok(r) if r.status().is_success() => {}
+            Ok(r) => {
+                let status = r.status();
+                let text = r.text().await.unwrap_or_default();
+                tracing::warn!("apns voip push rejected ({status}): {text}");
+            }
+            Err(e) => tracing::warn!("apns voip push error: {e}"),
+        }
+    }
 }

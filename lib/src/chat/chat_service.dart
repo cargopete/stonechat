@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 
 import '../crypto/envelope.dart';
 import '../crypto/identity.dart';
@@ -25,10 +26,15 @@ enum PeerChannel { bluetooth, web, offline }
 enum CallSignalType { offer, answer, ice, end }
 
 class CallSignal {
-  CallSignal(this.peerId, this.type, this.json);
+  CallSignal(this.peerId, this.type, this.json, this.callId);
   final String peerId;
   final CallSignalType type;
   final String json;
+
+  /// The offer envelope's message_id as a canonical UUID. The relay derives the
+  /// same id for the VoIP push, so a CallKit call rung from a push lines up with
+  /// the one the app sets up once the offer is decrypted.
+  final String callId;
 }
 
 /// Exponential outbox retry backoff: 2s, 4s, 8s … capped at 5 minutes.
@@ -125,10 +131,19 @@ class ChatService {
     if (keys == null) return;
     try {
       final json = utf8.decode(crypto.open(env, sender: keys));
-      _callSignals.add(CallSignal(identityHex, type, json));
+      _callSignals.add(
+          CallSignal(identityHex, type, json, _uuidFromBytes(env.messageId)));
     } on SignatureVerificationException {
       // ignore
     }
+  }
+
+  /// Formats a 16-byte message_id as a canonical UUID (8-4-4-4-12), matching the
+  /// relay's `uuid_from_hex` so the CallKit call id is identical on both sides.
+  static String _uuidFromBytes(Uint8List b) {
+    final h = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}'
+        '-${h.substring(16, 20)}-${h.substring(20, 32)}';
   }
 
   final StreamController<TransportEvent> _events =
@@ -193,18 +208,30 @@ class ChatService {
     unawaited(_registerPushIfNeeded());
   }
 
-  bool _pushRegistered = false;
+  String? _lastPushToken;
+  String? _lastVoipToken;
 
-  /// Registers this device's APNs token with the relay so relayed messages can
-  /// wake it. The token arrives asynchronously after launch, so this is retried
-  /// (on each foreground/tick) until it succeeds once.
+  /// Registers this device's APNs token — and PushKit VoIP token, once iOS hands
+  /// it over — with the relay so relayed messages and calls can wake it. Both
+  /// tokens arrive asynchronously after launch (and the VoIP one usually lags
+  /// the APNs one), so this re-registers whenever either first appears or
+  /// changes, rather than only once.
   Future<void> _registerPushIfNeeded() async {
     final relay = _relay;
-    if (relay == null || _pushRegistered) return;
+    if (relay == null) return;
     final token = await _api.pushToken();
     if (token == null || token.isEmpty) return;
-    await relay.register(token);
-    _pushRegistered = true;
+    String? voip;
+    try {
+      final dynamic v = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
+      if (v is String && v.isNotEmpty) voip = v;
+    } catch (_) {
+      // CallKit plugin not ready yet — try again on the next tick.
+    }
+    if (token == _lastPushToken && voip == _lastVoipToken) return;
+    await relay.register(token, voipToken: voip);
+    _lastPushToken = token;
+    _lastVoipToken = voip;
   }
 
   /// Called when the app returns to the foreground (and from a manual refresh):

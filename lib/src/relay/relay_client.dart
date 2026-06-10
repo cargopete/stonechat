@@ -83,14 +83,19 @@ class RelayClient {
     }
   }
 
-  /// Registers (or refreshes) this identity's APNs push token. Phase 2.
-  Future<void> register(String pushToken) async {
+  /// Registers (or refreshes) this identity's APNs push token, plus the optional
+  /// PushKit VoIP token used to ring incoming calls on a killed app.
+  Future<void> register(String pushToken, {String? voipToken}) async {
     try {
       await http
           .post(
             Uri.parse('$baseUrl/register'),
             headers: {'content-type': 'application/json'},
-            body: jsonEncode({..._authBody(), 'push_token': pushToken}),
+            body: jsonEncode({
+              ..._authBody(),
+              'push_token': pushToken,
+              'voip_token': ?voipToken,
+            }),
           )
           .timeout(_timeout);
     } catch (_) {

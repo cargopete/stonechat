@@ -34,20 +34,29 @@ impl Store {
              );
              CREATE INDEX IF NOT EXISTS queue_recipient ON queue(recipient);",
         )?;
+        // PushKit/CallKit VoIP token, added later — ignore the error when the
+        // column already exists (SQLite has no IF NOT EXISTS for ADD COLUMN).
+        let _ = conn.execute("ALTER TABLE registrations ADD COLUMN voip_token TEXT", []);
         Ok(Self { conn: Mutex::new(conn) })
     }
 
+    /// Upserts the APNs token, and the VoIP token when one is supplied. A `None`
+    /// VoIP token leaves any existing one intact (older clients omit it).
     pub fn upsert_registration(
         &self,
         identity: &str,
         push_token: &str,
+        voip_token: Option<&str>,
         now: i64,
     ) -> anyhow::Result<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT INTO registrations (identity, push_token, updated_at)
-             VALUES (?1, ?2, ?3)
-             ON CONFLICT(identity) DO UPDATE SET push_token=?2, updated_at=?3",
-            (identity, push_token, now),
+            "INSERT INTO registrations (identity, push_token, voip_token, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(identity) DO UPDATE SET
+                push_token=?2,
+                voip_token=COALESCE(?3, voip_token),
+                updated_at=?4",
+            (identity, push_token, voip_token, now),
         )?;
         Ok(())
     }
@@ -59,6 +68,19 @@ impl Store {
         let mut rows = stmt.query([identity])?;
         Ok(match rows.next()? {
             Some(row) => Some(row.get(0)?),
+            None => None,
+        })
+    }
+
+    /// The PushKit VoIP token for an identity, if one was ever registered.
+    pub fn voip_token(&self, identity: &str) -> anyhow::Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT voip_token FROM registrations WHERE identity=?1")?;
+        let mut rows = stmt.query([identity])?;
+        Ok(match rows.next()? {
+            // The column is nullable, so the cell itself may be NULL.
+            Some(row) => row.get::<_, Option<String>>(0)?,
             None => None,
         })
     }

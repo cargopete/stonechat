@@ -86,6 +86,23 @@ fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
 }
 
+/// Formats a 32-char hex message id as a canonical UUID (8-4-4-4-12). The client
+/// derives the same id from the offer envelope's message_id, so the CallKit call
+/// shown from the VoIP push matches the one the app sets up on answer.
+fn uuid_from_hex(h: &str) -> String {
+    if h.len() != 32 {
+        return h.to_string();
+    }
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
+}
+
 /// Proves the caller holds the Ed25519 private key for `identity` by verifying a
 /// signature over `stonechat-auth|<ts>`, with `ts` (epoch ms) within ±5 min.
 fn verify_auth(identity_hex: &str, ts: i64, sig_hex: &str) -> bool {
@@ -106,6 +123,9 @@ fn verify_auth(identity_hex: &str, ts: i64, sig_hex: &str) -> bool {
 struct RegisterReq {
     identity: String,
     push_token: String,
+    /// PushKit VoIP token (optional — only clients with calls send it).
+    #[serde(default)]
+    voip_token: Option<String>,
     ts: i64,
     sig: String,
 }
@@ -117,7 +137,12 @@ async fn register(
     if !verify_auth(&req.identity, req.ts, &req.sig) {
         return (StatusCode::UNAUTHORIZED, "bad auth").into_response();
     }
-    match state.store.upsert_registration(&req.identity, &req.push_token, now_ms()) {
+    match state.store.upsert_registration(
+        &req.identity,
+        &req.push_token,
+        req.voip_token.as_deref(),
+        now_ms(),
+    ) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::error!("register failed: {e}");
@@ -142,11 +167,30 @@ async fn send(State(state): State<Arc<AppState>>, body: Bytes) -> impl IntoRespo
         tracing::error!("enqueue failed: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    // Wake the recipient if we have a push token for them.
+    // Wake the recipient. A call offer must ring even on a killed app, which on
+    // iOS means a PushKit VoIP push → CallKit; everything else is a plain alert.
+    // The mid-call signalling types (answer/ICE/end) need no push: by then both
+    // peers are live and polling fast, so a silent enqueue suffices.
     if let Some(apns) = &state.apns {
-        if let Ok(Some(token)) = state.store.push_token(&meta.recipient_hex) {
-            let body = if meta.msg_type == 8 { "Sent a photo" } else { "New message" };
-            apns.wake(&token, body, &meta.sender_hex, now_ms() / 1000).await;
+        let now = now_ms() / 1000;
+        match meta.msg_type {
+            10 => {
+                if let Ok(Some(voip)) = state.store.voip_token(&meta.recipient_hex) {
+                    let uuid = uuid_from_hex(&meta.message_id_hex);
+                    apns.wake_voip(&voip, &uuid, &meta.sender_hex, now).await;
+                } else if let Ok(Some(token)) = state.store.push_token(&meta.recipient_hex) {
+                    // No VoIP token (older build) — fall back to a visible alert.
+                    apns.wake(&token, "Incoming call", &meta.sender_hex, now).await;
+                }
+            }
+            11 | 12 | 13 => {}
+            _ => {
+                if let Ok(Some(token)) = state.store.push_token(&meta.recipient_hex) {
+                    let body =
+                        if meta.msg_type == 8 { "Sent a photo" } else { "New message" };
+                    apns.wake(&token, body, &meta.sender_hex, now).await;
+                }
+            }
         }
     }
     StatusCode::ACCEPTED.into_response()
