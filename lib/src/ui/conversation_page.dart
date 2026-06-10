@@ -132,24 +132,16 @@ class _ConversationPageState extends State<ConversationPage> {
           initialData: widget.peer,
           builder: (context, peerSnap) {
             final peer = peerSnap.data ?? widget.peer;
-            return ValueListenableBuilder<Set<String>>(
-              valueListenable: widget.service.onlineIdentities,
-              builder: (context, online, _) {
-                final isOnline = online.contains(widget.peer.id);
-                return Row(
-                  children: [
-                    Icon(Icons.circle,
-                        size: 12, color: isOnline ? Colors.green : Colors.grey),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        peerLabelFor(peer, widget.peer.id),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                );
-              },
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  peerLabelFor(peer, widget.peer.id),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                _ChannelLine(service: widget.service, peerId: widget.peer.id),
+              ],
             );
           },
         ),
@@ -194,6 +186,52 @@ class _ConversationPageState extends State<ConversationPage> {
             onAttach: _sendImage,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A small "how am I reaching this peer" line under the name: Bluetooth, web
+/// (relay), or offline. Rebuilds when either channel's state changes.
+class _ChannelLine extends StatelessWidget {
+  const _ChannelLine({required this.service, required this.peerId});
+
+  final ChatService service;
+  final String peerId;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Set<String>>(
+      valueListenable: service.onlineIdentities,
+      builder: (context, _, _) => ValueListenableBuilder<bool>(
+        valueListenable: service.relayReachable,
+        builder: (context, _, _) {
+          final (icon, color, label) = switch (service.channelFor(peerId)) {
+            PeerChannel.bluetooth => (
+                Icons.bluetooth_connected,
+                Colors.blue.shade600,
+                'Bluetooth',
+              ),
+            PeerChannel.web => (
+                Icons.cloud_done_outlined,
+                Colors.teal.shade600,
+                'Online · web',
+              ),
+            PeerChannel.offline => (
+                Icons.cloud_off_outlined,
+                Theme.of(context).colorScheme.onSurfaceVariant,
+                'Offline · queued',
+              ),
+          };
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 13, color: color),
+              const SizedBox(width: 4),
+              Text(label, style: TextStyle(fontSize: 12, color: color)),
+            ],
+          );
+        },
       ),
     );
   }

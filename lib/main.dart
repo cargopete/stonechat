@@ -9,8 +9,14 @@ import 'src/chat/chat_service.dart';
 import 'src/crypto/identity.dart';
 import 'src/crypto/identity_store.dart';
 import 'src/data/database.dart';
+import 'src/relay/relay_client.dart';
 import 'src/ui/conversation_page.dart';
 import 'src/ui/home_page.dart';
+
+/// Default relay ("web" channel) URL. Overridable via the `relayUrl` setting.
+/// The sslip.io host resolves straight to the VPS, so it works without any
+/// custom DNS; set the `relayUrl` setting to swap in relay.nbgn.app later.
+const String _defaultRelayUrl = 'https://relay.89.167.109.4.sslip.io';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,7 +41,16 @@ class AppBootstrap {
     final db = AppDatabase();
     final identity = await IdentityStore(sodium).loadOrCreate();
     final crypto = EnvelopeCrypto(sodium, identity);
-    final service = ChatService(db: db, crypto: crypto);
+    // The relay is the optional "web" channel. Empty URL → pure-offline (no relay).
+    final relayUrl = await db.getSetting('relayUrl') ?? _defaultRelayUrl;
+    final relay = relayUrl.isEmpty
+        ? null
+        : RelayClient(
+            baseUrl: relayUrl,
+            identityHex: hex(identity.identityPublicKey),
+            sign: crypto.signAuth,
+          );
+    final service = ChatService(db: db, crypto: crypto, relay: relay);
     // Never seed in a release build, even if the SEED define leaks into an
     // archive — this is purely a dev-only screenshot aid.
     const seed = !kReleaseMode && String.fromEnvironment('SEED') == 'demo';

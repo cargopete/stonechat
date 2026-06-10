@@ -8,11 +8,17 @@ import 'package:flutter/foundation.dart';
 import '../crypto/envelope.dart';
 import '../crypto/identity.dart';
 import '../data/database.dart';
+import '../relay/relay_client.dart';
 import '../transport/transport_api.g.dart';
 
 /// Hex-encode bytes (used as the stable peer/message key in the database).
 String hex(Uint8List bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+/// The live channel to a peer, for the connection indicator. Bluetooth is
+/// preferred; the relay ("web") is the fallback; otherwise we're offline (and
+/// anything sent simply queues).
+enum PeerChannel { bluetooth, web, offline }
 
 /// Exponential outbox retry backoff: 2s, 4s, 8s … capped at 5 minutes.
 /// Pure function, kept top-level so it can be unit-tested without a transport.
@@ -32,8 +38,13 @@ Duration outboxBackoff(int attempts) {
 /// reconciles them into drift on launch/resume, resolving peer keys from the
 /// database since the in-memory caches are empty after a cold restore.
 class ChatService {
-  ChatService({required this.db, required this.crypto, TransportHostApi? api})
-      : _api = api ?? TransportHostApi();
+  ChatService({
+    required this.db,
+    required this.crypto,
+    RelayClient? relay,
+    TransportHostApi? api,
+  })  : _relay = relay,
+        _api = api ?? TransportHostApi();
 
   // Must match the Swift `BleConstants`.
   static const String serviceUuid = '9F2A1C00-5B3E-4D7A-8C21-7E0B6A4F1D90';
@@ -46,6 +57,30 @@ class ChatService {
   final AppDatabase db;
   final EnvelopeCrypto crypto;
   final TransportHostApi _api;
+
+  /// The optional "web" channel: a relay used when Bluetooth can't reach the
+  /// peer. Null when no relay is configured (pure-offline mode).
+  final RelayClient? _relay;
+
+  /// Whether the relay was reachable on the last attempt — drives the
+  /// Bluetooth/Web/Offline indicator. Always false without a configured relay.
+  final ValueNotifier<bool> relayReachable = ValueNotifier<bool>(false);
+
+  bool get hasRelay => _relay != null;
+
+  /// The current channel to a peer for the UI indicator: Bluetooth if connected,
+  /// else web if the relay is reachable, else offline.
+  PeerChannel channelFor(String identityHex) {
+    if (onlineIdentities.value.contains(identityHex)) {
+      return PeerChannel.bluetooth;
+    }
+    if (relayReachable.value) return PeerChannel.web;
+    return PeerChannel.offline;
+  }
+
+  /// Messages already handed to the relay, so the periodic flush doesn't re-POST
+  /// them every tick (the relay dedups anyway; this just saves the round-trips).
+  final Set<String> _relayed = {};
 
   final StreamController<TransportEvent> _events =
       StreamController<TransportEvent>.broadcast();
@@ -92,7 +127,13 @@ class ChatService {
       peripheralRestoreIdentifier: _peripheralRestoreId,
     ));
     _sub = streamTransportEvents().listen(_onEvent);
-    _retryTimer = Timer.periodic(_retryInterval, (_) => unawaited(_retryOutbox()));
+    _retryTimer = Timer.periodic(_retryInterval, (_) {
+      unawaited(_retryOutbox());
+      // Poll the web channel while in the foreground: pull relayed messages and
+      // push anything still undelivered to the relay.
+      unawaited(drainRelay());
+      unawaited(_flushPendingToRelay());
+    });
     await _api.startAdvertising();
     await _api.startScanning();
     await drainInbox();
@@ -109,6 +150,10 @@ class ChatService {
     await _api.startScanning();
     await drainInbox();
     await _retryOutbox();
+    // Sync the web channel too: pull anything relayed to us, then push our
+    // still-undelivered messages to the relay for peers we can't reach by BLE.
+    await drainRelay();
+    await _flushPendingToRelay();
   }
 
   /// Updates the name announced to peers and re-announces to everyone currently
@@ -145,6 +190,7 @@ class ChatService {
     await _events.close();
     adapterState.dispose();
     onlineIdentities.dispose();
+    relayReachable.dispose();
   }
 
   void _onEvent(TransportEvent event) {
@@ -195,11 +241,17 @@ class ChatService {
     } on FormatException {
       return;
     }
-
     final identityHex = hex(env.senderId);
+    // Bind this BLE connection to the sender's identity so replies route over it.
     _identityByConnection[connectionId] = identityHex;
     _connectionByIdentity[identityHex] = connectionId;
+    await _routeEnvelope(env, identityHex);
+  }
 
+  /// Handles one decoded envelope regardless of how it arrived (Bluetooth or
+  /// relay). Any reply (ack, name announce) is sent via [_dispatchEnvelope],
+  /// which picks whichever channel can currently reach the peer.
+  Future<void> _routeEnvelope(Envelope env, String identityHex) async {
     switch (env.type) {
       case EnvelopeType.hello:
         await _onHello(env, identityHex);
@@ -211,7 +263,7 @@ class ChatService {
         await _onRead(env, identityHex);
       case EnvelopeType.message:
       case EnvelopeType.image:
-        await _onMessage(connectionId, env, identityHex);
+        await _onMessage(env, identityHex);
       case EnvelopeType.fragmentStart:
       case EnvelopeType.fragmentCont:
       case EnvelopeType.fragmentEnd:
@@ -219,6 +271,22 @@ class ChatService {
         // surface here.
         break;
     }
+  }
+
+  /// Sends an envelope to a peer over the best available channel: Bluetooth if
+  /// connected, otherwise the relay ("web"), otherwise gives up (false). This is
+  /// the single choke point that makes delivery Bluetooth-first, web-fallback.
+  Future<bool> _dispatchEnvelope(String identityHex, Uint8List bytes) async {
+    final connectionId = _connectionByIdentity[identityHex];
+    if (connectionId != null && await _api.sendEnvelope(connectionId, bytes)) {
+      return true;
+    }
+    final relay = _relay;
+    if (relay != null && await relay.send(bytes)) {
+      relayReachable.value = true;
+      return true;
+    }
+    return false;
   }
 
   Future<void> _onHello(Envelope env, String identityHex) async {
@@ -312,20 +380,19 @@ class ChatService {
   /// inbound message not yet acknowledged as read, and record locally (state
   /// `seen`) that we've done so, so we don't re-send receipts endlessly.
   Future<void> markConversationRead(String identityHex) async {
-    final connectionId = _connectionByIdentity[identityHex];
-    final keys = _keysByIdentity[identityHex] ??
-        await _resolvePeerKeys(identityHex);
+    final keys =
+        _keysByIdentity[identityHex] ?? await _resolvePeerKeys(identityHex);
     final pending = await db.inboundAwaitingReceipt(identityHex);
     for (final message in pending) {
-      // Always mark locally read; only emit a receipt if we can reach the peer.
+      // Always mark locally read; emit a receipt over whichever channel works.
       await db.markState(message.messageId, MessageDeliveryState.seen);
-      if (connectionId == null || keys == null) continue;
+      if (keys == null) continue;
       final receipt = crypto.seal(
         type: EnvelopeType.read,
         plaintext: _messageIdBytes(message.messageId),
         recipient: keys,
       );
-      await _api.sendEnvelope(connectionId, receipt.toBytes());
+      await _dispatchEnvelope(identityHex, receipt.toBytes());
     }
   }
 
@@ -338,8 +405,7 @@ class ChatService {
     return out;
   }
 
-  Future<void> _onMessage(
-      String connectionId, Envelope env, String identityHex) async {
+  Future<void> _onMessage(Envelope env, String identityHex) async {
     final keys = await _resolvePeerKeys(identityHex);
     if (keys == null) return; // No hello yet. TODO: buffer until handshake.
 
@@ -347,7 +413,7 @@ class ChatService {
     // Dedup: a re-sent duplicate is dropped but still re-ACKed so the sender
     // stops retrying.
     if (await db.hasMessage(messageIdHex)) {
-      await _sendAck(connectionId, env);
+      await _sendAck(env);
       return;
     }
 
@@ -365,22 +431,24 @@ class ChatService {
         state: Value(MessageDeliveryState.received),
         createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
       ));
-      await _sendAck(connectionId, env);
+      await _sendAck(env);
     } on SignatureVerificationException {
       // drop
     }
   }
 
-  /// ACKs by boxing the original `message_id` back to the sender.
-  Future<void> _sendAck(String connectionId, Envelope original) async {
-    final keys = await _resolvePeerKeys(hex(original.senderId));
+  /// ACKs by boxing the original `message_id` back to the sender, over whichever
+  /// channel can reach them (Bluetooth or relay).
+  Future<void> _sendAck(Envelope original) async {
+    final senderHex = hex(original.senderId);
+    final keys = await _resolvePeerKeys(senderHex);
     if (keys == null) return;
     final ack = crypto.seal(
       type: EnvelopeType.ack,
       plaintext: original.messageId,
       recipient: keys,
     );
-    await _api.sendEnvelope(connectionId, ack.toBytes());
+    await _dispatchEnvelope(senderHex, ack.toBytes());
   }
 
   /// Sends a text message to a known peer. Works offline: the message is sealed
@@ -439,14 +507,61 @@ class ChatService {
       envelope: Value(env.toBytes()),
     ));
 
-    final connectionId = _connectionByIdentity[identityHex];
-    if (connectionId != null) {
-      final dispatched = await _api.sendEnvelope(connectionId, env.toBytes());
-      if (dispatched) {
-        await db.markState(messageIdHex, MessageDeliveryState.sent);
-      }
-      // On a failed dispatch, leave it queued for the outbox to retry.
+    // Deliver now over the best available channel (Bluetooth-first, then web).
+    // On failure it stays `queued`; the outbox + relay flush retry it later.
+    final dispatched = await _dispatchEnvelope(identityHex, env.toBytes());
+    if (dispatched) {
+      await db.markState(messageIdHex, MessageDeliveryState.sent);
+      if (_connectionByIdentity[identityHex] == null) _relayed.add(messageIdHex);
     }
+  }
+
+  /// Pulls any relayed envelopes for us, routes each (so messages, acks and read
+  /// receipts that arrived over the web are applied), then clears them from the
+  /// relay queue. Updates [relayReachable]. No-op without a relay.
+  Future<void> drainRelay() async {
+    final relay = _relay;
+    if (relay == null) return;
+    final envelopes = await relay.inbox();
+    if (envelopes == null) {
+      relayReachable.value = false;
+      return;
+    }
+    relayReachable.value = true;
+    final processed = <String>[];
+    for (final bytes in envelopes) {
+      final Envelope env;
+      try {
+        env = Envelope.fromBytes(bytes);
+      } on FormatException {
+        continue;
+      }
+      await _routeEnvelope(env, hex(env.senderId));
+      processed.add(hex(env.messageId));
+    }
+    await relay.ack(processed);
+  }
+
+  /// Pushes still-undelivered outbound messages to the relay for peers we can't
+  /// currently reach over Bluetooth, so they're waiting when the peer next syncs.
+  /// Each is sent to the relay at most once (the relay dedups regardless).
+  Future<void> _flushPendingToRelay() async {
+    final relay = _relay;
+    if (relay == null) return;
+    final pending = await db.allPending();
+    var reached = false;
+    for (final message in pending) {
+      final bytes = message.envelope;
+      if (bytes == null) continue;
+      if (_connectionByIdentity[message.peerId] != null) continue; // BLE will do it
+      if (_relayed.contains(message.messageId)) continue;
+      if (await relay.send(bytes)) {
+        _relayed.add(message.messageId);
+        await db.markState(message.messageId, MessageDeliveryState.sent);
+        reached = true;
+      }
+    }
+    if (reached) relayReachable.value = true;
   }
 
   /// Periodic retry: re-flush the outbox to every online peer, honouring each

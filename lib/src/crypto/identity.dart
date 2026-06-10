@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:sodium/sodium.dart';
@@ -162,6 +163,13 @@ class EnvelopeCrypto {
       boxPublicKey: envelope.ciphertext,
     );
   }
+
+  /// Signs the relay auth token `stonechat-auth|<ts>` with this device's
+  /// Ed25519 identity key, proving ownership of the identity to the relay.
+  Uint8List signAuth(int ts) => _sodium.crypto.sign.detached(
+        message: Uint8List.fromList(utf8.encode('stonechat-auth|$ts')),
+        secretKey: self.signKeyPair.secretKey,
+      );
 
   /// 16 random bytes — the envelope `message_id` / primary dedup key.
   Uint8List _messageId() {

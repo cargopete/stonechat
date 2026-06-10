@@ -189,6 +189,20 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
+  /// Every still-undelivered outbound message, across all peers (for the relay
+  /// flush, which isn't scoped to a single peer like [pendingFor]).
+  Future<List<Message>> allPending() {
+    return (select(messages)
+          ..where((m) =>
+              m.direction.equalsValue(MessageDirection.outbound) &
+              m.state.isNotInValues([
+                MessageDeliveryState.acked,
+                MessageDeliveryState.seen,
+                MessageDeliveryState.failed,
+              ])))
+        .get();
+  }
+
   // --- Settings -----------------------------------------------------------
 
   Future<String?> getSetting(String key) async {
