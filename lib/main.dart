@@ -9,6 +9,8 @@ import 'src/chat/chat_service.dart';
 import 'src/crypto/identity.dart';
 import 'src/crypto/identity_store.dart';
 import 'src/data/database.dart';
+import 'src/call/call_manager.dart';
+import 'src/call/call_screen.dart';
 import 'src/relay/relay_client.dart';
 import 'src/ui/conversation_page.dart';
 import 'src/ui/home_page.dart';
@@ -26,11 +28,13 @@ Future<void> main() async {
 
 /// Long-lived singletons, assembled once at startup.
 class AppBootstrap {
-  AppBootstrap._(this.db, this.identity, this.service, this.demoPeer);
+  AppBootstrap._(
+      this.db, this.identity, this.service, this.callManager, this.demoPeer);
 
   final AppDatabase db;
   final DeviceIdentity identity;
   final ChatService service;
+  final CallManager callManager;
 
   /// Non-null only under the dev-only `--dart-define=SEED=demo` build, which
   /// populates a sample conversation so screens can be captured without a real
@@ -63,11 +67,12 @@ class AppBootstrap {
       final myName = await db.getSetting('myDisplayName') ?? 'stonechat';
       await service.start(displayName: myName);
     }
+    final callManager = CallManager(service: service, db: db);
     Peer? demoPeer;
     if (seed) {
       demoPeer = await _seedDemo(db);
     }
-    return AppBootstrap._(db, identity, service, demoPeer);
+    return AppBootstrap._(db, identity, service, callManager, demoPeer);
   }
 
   static Future<Peer> _seedDemo(AppDatabase db) async {
@@ -154,14 +159,19 @@ class _BootstrapperState extends State<_Bootstrapper> {
         final boot = snapshot.data!;
         // Dev-only seed opens straight into the sample conversation for a clean
         // screenshot; normal builds always land on the peer list.
-        if (boot.demoPeer != null) {
-          return ConversationPage(
-            service: boot.service,
-            db: boot.db,
-            peer: boot.demoPeer!,
-          );
-        }
-        return HomePage(service: boot.service, db: boot.db);
+        final Widget home = boot.demoPeer != null
+            ? ConversationPage(
+                service: boot.service,
+                db: boot.db,
+                peer: boot.demoPeer!,
+                callManager: boot.callManager,
+              )
+            : HomePage(
+                service: boot.service,
+                db: boot.db,
+                callManager: boot.callManager,
+              );
+        return CallHost(manager: boot.callManager, child: home);
       },
     );
   }

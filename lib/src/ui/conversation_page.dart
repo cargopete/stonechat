@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../call/call_manager.dart';
 import '../chat/chat_service.dart';
 import '../data/database.dart';
 import 'image_viewer.dart';
@@ -17,11 +18,13 @@ class ConversationPage extends StatefulWidget {
     required this.service,
     required this.db,
     required this.peer,
+    required this.callManager,
   });
 
   final ChatService service;
   final AppDatabase db;
   final Peer peer;
+  final CallManager callManager;
 
   @override
   State<ConversationPage> createState() => _ConversationPageState();
@@ -94,6 +97,12 @@ class _ConversationPageState extends State<ConversationPage> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
+  }
+
+  Future<void> _call({required bool video}) async {
+    final peer = await widget.db.peerById(_peerId);
+    final name = peerLabelFor(peer, _peerId);
+    await widget.callManager.startCall(_peerId, name, video: video);
   }
 
   void _react(Message m, String emoji) {
@@ -187,6 +196,16 @@ class _ConversationPageState extends State<ConversationPage> {
           },
         ),
         actions: [
+          IconButton(
+            tooltip: 'Voice call',
+            icon: const Icon(Icons.call_rounded, size: 21),
+            onPressed: () => _call(video: false),
+          ),
+          IconButton(
+            tooltip: 'Video call',
+            icon: const Icon(Icons.videocam_rounded, size: 22),
+            onPressed: () => _call(video: true),
+          ),
           IconButton(
             tooltip: 'Set nickname',
             icon: const Icon(Icons.edit_outlined, size: 20),

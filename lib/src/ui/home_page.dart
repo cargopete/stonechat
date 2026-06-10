@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../call/call_manager.dart';
 import '../chat/chat_service.dart';
 import '../data/database.dart';
 import '../transport/transport_api.g.dart';
@@ -11,10 +12,16 @@ import 'theme.dart';
 String peerLabel(Peer peer) => peerLabelFor(peer, peer.id);
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.service, required this.db});
+  const HomePage({
+    super.key,
+    required this.service,
+    required this.db,
+    required this.callManager,
+  });
 
   final ChatService service;
   final AppDatabase db;
+  final CallManager callManager;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -140,6 +147,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 service: service,
                                 db: db,
                                 peer: peer,
+                                callManager: widget.callManager,
                               ),
                             ),
                           ),

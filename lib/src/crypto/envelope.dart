@@ -32,7 +32,14 @@ enum EnvelopeType {
   image(8),
   // reaction: payload is the 16-byte referenced message_id followed by the
   // reaction emoji (UTF-8); an empty emoji clears the reaction.
-  reaction(9);
+  reaction(9),
+  // Call signaling — payload is a UTF-8 JSON blob. The whole envelope is
+  // Ed25519-signed, so the DTLS fingerprint carried inside the SDP is
+  // authenticated end-to-end (the relay can't MITM call setup).
+  callOffer(10),
+  callAnswer(11),
+  callIce(12),
+  callEnd(13);
 
   const EnvelopeType(this.wire);
   final int wire;

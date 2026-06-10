@@ -21,6 +21,16 @@ String hex(Uint8List bytes) =>
 /// anything sent simply queues).
 enum PeerChannel { bluetooth, web, offline }
 
+/// A WebRTC call-setup message surfaced from an inbound signaling envelope.
+enum CallSignalType { offer, answer, ice, end }
+
+class CallSignal {
+  CallSignal(this.peerId, this.type, this.json);
+  final String peerId;
+  final CallSignalType type;
+  final String json;
+}
+
 /// Exponential outbox retry backoff: 2s, 4s, 8s … capped at 5 minutes.
 /// Pure function, kept top-level so it can be unit-tested without a transport.
 Duration outboxBackoff(int attempts) {
@@ -82,6 +92,44 @@ class ChatService {
   /// Messages already handed to the relay, so the periodic flush doesn't re-POST
   /// them every tick (the relay dedups anyway; this just saves the round-trips).
   final Set<String> _relayed = {};
+
+  /// Inbound WebRTC call-signaling messages (offer/answer/ICE/hangup), consumed
+  /// by the call layer.
+  final StreamController<CallSignal> _callSignals =
+      StreamController<CallSignal>.broadcast();
+  Stream<CallSignal> get callSignals => _callSignals.stream;
+
+  /// Sends a WebRTC signaling message (SDP / ICE / hangup) over whichever
+  /// channel can reach the peer.
+  Future<void> sendCallSignal(
+      String identityHex, CallSignalType type, String json) async {
+    final keys = await _resolvePeerKeys(identityHex);
+    if (keys == null) return;
+    final opcode = switch (type) {
+      CallSignalType.offer => EnvelopeType.callOffer,
+      CallSignalType.answer => EnvelopeType.callAnswer,
+      CallSignalType.ice => EnvelopeType.callIce,
+      CallSignalType.end => EnvelopeType.callEnd,
+    };
+    final env = crypto.seal(
+      type: opcode,
+      plaintext: Uint8List.fromList(utf8.encode(json)),
+      recipient: keys,
+    );
+    await _dispatchEnvelope(identityHex, env.toBytes());
+  }
+
+  Future<void> _onCallSignal(
+      Envelope env, String identityHex, CallSignalType type) async {
+    final keys = await _resolvePeerKeys(identityHex);
+    if (keys == null) return;
+    try {
+      final json = utf8.decode(crypto.open(env, sender: keys));
+      _callSignals.add(CallSignal(identityHex, type, json));
+    } on SignatureVerificationException {
+      // ignore
+    }
+  }
 
   final StreamController<TransportEvent> _events =
       StreamController<TransportEvent>.broadcast();
@@ -212,6 +260,7 @@ class ChatService {
     adapterState.dispose();
     onlineIdentities.dispose();
     relayReachable.dispose();
+    await _callSignals.close();
   }
 
   void _onEvent(TransportEvent event) {
@@ -284,6 +333,14 @@ class ChatService {
         await _onRead(env, identityHex);
       case EnvelopeType.reaction:
         await _onReaction(env, identityHex);
+      case EnvelopeType.callOffer:
+        await _onCallSignal(env, identityHex, CallSignalType.offer);
+      case EnvelopeType.callAnswer:
+        await _onCallSignal(env, identityHex, CallSignalType.answer);
+      case EnvelopeType.callIce:
+        await _onCallSignal(env, identityHex, CallSignalType.ice);
+      case EnvelopeType.callEnd:
+        await _onCallSignal(env, identityHex, CallSignalType.end);
       case EnvelopeType.message:
       case EnvelopeType.image:
         await _onMessage(env, identityHex);
@@ -793,6 +850,14 @@ class ChatService {
         await _onRead(env, identityHex);
       case EnvelopeType.reaction:
         await _onReaction(env, identityHex);
+      case EnvelopeType.callOffer:
+        await _onCallSignal(env, identityHex, CallSignalType.offer);
+      case EnvelopeType.callAnswer:
+        await _onCallSignal(env, identityHex, CallSignalType.answer);
+      case EnvelopeType.callIce:
+        await _onCallSignal(env, identityHex, CallSignalType.ice);
+      case EnvelopeType.callEnd:
+        await _onCallSignal(env, identityHex, CallSignalType.end);
       case EnvelopeType.fragmentStart:
       case EnvelopeType.fragmentCont:
       case EnvelopeType.fragmentEnd:
