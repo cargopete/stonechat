@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
@@ -281,6 +282,8 @@ class ChatService {
         await _onAck(env, identityHex);
       case EnvelopeType.read:
         await _onRead(env, identityHex);
+      case EnvelopeType.reaction:
+        await _onReaction(env, identityHex);
       case EnvelopeType.message:
       case EnvelopeType.image:
         await _onMessage(env, identityHex);
@@ -438,15 +441,16 @@ class ChatService {
     }
 
     try {
-      final plaintext = crypto.open(env, sender: keys);
+      final (replyTo, payload) = _decodeReply(crypto.open(env, sender: keys));
       final isImage = env.type == EnvelopeType.image;
       await db.insertMessage(MessagesCompanion(
         messageId: Value(messageIdHex),
         peerId: Value(identityHex),
         direction: Value(MessageDirection.inbound),
         kind: Value(isImage ? MessageKind.image : MessageKind.text),
-        body: Value(isImage ? '' : utf8.decode(plaintext)),
-        mediaBytes: Value(isImage ? plaintext : null),
+        body: Value(isImage ? '' : utf8.decode(payload)),
+        mediaBytes: Value(isImage ? payload : null),
+        replyToMessageId: Value(replyTo),
         timestampMs: Value(env.timestampMs),
         state: Value(MessageDeliveryState.received),
         createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
@@ -471,44 +475,112 @@ class ChatService {
     await _dispatchEnvelope(senderHex, ack.toBytes());
   }
 
-  /// Sends a text message to a known peer. Works offline: the message is sealed
-  /// and queued immediately, and the store-and-forward outbox delivers it on the
-  /// next reconnect — so a dropped link never surfaces an error to the user.
-  Future<void> sendText(String identityHex, String text) => _enqueueOutbound(
+  /// Sends a text message to a known peer, optionally as a reply. Works offline:
+  /// sealed + queued immediately, delivered by the outbox on reconnect — so a
+  /// dropped link never surfaces an error.
+  Future<void> sendText(String identityHex, String text, {String? replyTo}) =>
+      _enqueueOutbound(
         identityHex: identityHex,
         type: EnvelopeType.message,
-        plaintext: Uint8List.fromList(utf8.encode(text)),
+        payload: Uint8List.fromList(utf8.encode(text)),
         kind: MessageKind.text,
         body: text,
+        replyTo: replyTo,
       );
 
-  /// Sends a photo (already-compressed bytes). Same offline-tolerant outbox path
-  /// as text; the transport fragments the larger payload into BLE frames.
-  Future<void> sendImage(String identityHex, Uint8List imageBytes) =>
+  /// Sends a photo (already-compressed bytes), optionally as a reply.
+  Future<void> sendImage(String identityHex, Uint8List imageBytes,
+          {String? replyTo}) =>
       _enqueueOutbound(
         identityHex: identityHex,
         type: EnvelopeType.image,
-        plaintext: imageBytes,
+        payload: imageBytes,
         kind: MessageKind.image,
         mediaBytes: imageBytes,
+        replyTo: replyTo,
       );
 
+  /// Sends a tapback reaction (or clears it with an empty emoji) for a message.
+  Future<void> sendReaction(
+      String identityHex, String messageId, String emoji) async {
+    final keys = await _resolvePeerKeys(identityHex);
+    if (keys == null) return;
+    await db.setReaction(messageId, identityHex, true, emoji);
+    final payload = BytesBuilder()
+      ..add(_messageIdBytes(messageId))
+      ..add(utf8.encode(emoji));
+    final env = crypto.seal(
+      type: EnvelopeType.reaction,
+      plaintext: payload.toBytes(),
+      recipient: keys,
+    );
+    await _dispatchEnvelope(identityHex, env.toBytes());
+  }
+
+  Future<void> _onReaction(Envelope env, String identityHex) async {
+    final keys = await _resolvePeerKeys(identityHex);
+    if (keys == null) return;
+    try {
+      final plaintext = crypto.open(env, sender: keys);
+      if (plaintext.length < Envelope.messageIdLen) return;
+      final referenced = hex(plaintext.sublist(0, Envelope.messageIdLen));
+      final emoji = utf8.decode(plaintext.sublist(Envelope.messageIdLen));
+      await db.setReaction(referenced, identityHex, false, emoji);
+    } on SignatureVerificationException {
+      // ignore
+    } on FormatException {
+      // ignore
+    }
+  }
+
+  /// Reply framing: an outbound payload is `"SCR1" + replyTo(16) + payload` when
+  /// it's a reply, else the raw payload. The magic makes false positives on
+  /// arbitrary bytes vanishingly unlikely.
+  static final Uint8List _replyMagic =
+      Uint8List.fromList([0x53, 0x43, 0x52, 0x31]); // "SCR1"
+
+  (String?, Uint8List) _decodeReply(Uint8List plaintext) {
+    if (plaintext.length >= 20 &&
+        plaintext[0] == 0x53 &&
+        plaintext[1] == 0x43 &&
+        plaintext[2] == 0x52 &&
+        plaintext[3] == 0x31) {
+      return (
+        hex(plaintext.sublist(4, 20)),
+        Uint8List.fromList(plaintext.sublist(20)),
+      );
+    }
+    return (null, plaintext);
+  }
+
   /// Seals an outbound message, records it as `queued`, and dispatches it now if
-  /// the peer is connected. If offline (or the dispatch fails), it stays
-  /// `queued` and the outbox flushes it on the next reconnect+handshake — never
-  /// throwing for "not connected". Throws only for a peer we've never met (no
-  /// keys on record), which the UI can't reach anyway.
+  /// reachable. If offline (or dispatch fails), it stays `queued` and the outbox
+  /// flushes it later — never throwing for "not connected". Throws only for a
+  /// peer we've never met (no keys on record), which the UI can't reach anyway.
   Future<void> _enqueueOutbound({
     required String identityHex,
     required EnvelopeType type,
-    required Uint8List plaintext,
+    required Uint8List payload,
     required MessageKind kind,
     String body = '',
     Uint8List? mediaBytes,
+    String? replyTo,
   }) async {
     final keys = await _resolvePeerKeys(identityHex);
     if (keys == null) {
       throw StateError('No handshake on record for this peer yet');
+    }
+
+    // Frame the reply (if any) into the sealed plaintext.
+    final Uint8List plaintext;
+    if (replyTo != null) {
+      plaintext = (BytesBuilder()
+            ..add(_replyMagic)
+            ..add(_messageIdBytes(replyTo))
+            ..add(payload))
+          .toBytes();
+    } else {
+      plaintext = payload;
     }
 
     final env = crypto.seal(type: type, plaintext: plaintext, recipient: keys);
@@ -521,6 +593,7 @@ class ChatService {
       kind: Value(kind),
       body: Value(body),
       mediaBytes: Value(mediaBytes),
+      replyToMessageId: Value(replyTo),
       timestampMs: Value(env.timestampMs),
       state: Value(MessageDeliveryState.queued),
       createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
@@ -697,15 +770,16 @@ class ChatService {
         final messageIdHex = hex(env.messageId);
         if (await db.hasMessage(messageIdHex)) return;
         try {
-          final plaintext = crypto.open(env, sender: keys);
+          final (replyTo, payload) = _decodeReply(crypto.open(env, sender: keys));
           final isImage = env.type == EnvelopeType.image;
           await db.insertMessage(MessagesCompanion(
             messageId: Value(messageIdHex),
             peerId: Value(identityHex),
             direction: Value(MessageDirection.inbound),
             kind: Value(isImage ? MessageKind.image : MessageKind.text),
-            body: Value(isImage ? '' : utf8.decode(plaintext)),
-            mediaBytes: Value(isImage ? plaintext : null),
+            body: Value(isImage ? '' : utf8.decode(payload)),
+            mediaBytes: Value(isImage ? payload : null),
+            replyToMessageId: Value(replyTo),
             timestampMs: Value(env.timestampMs),
             state: Value(MessageDeliveryState.received),
             createdAtMs: Value(DateTime.now().millisecondsSinceEpoch),
@@ -717,6 +791,8 @@ class ChatService {
         await _onAck(env, identityHex);
       case EnvelopeType.read:
         await _onRead(env, identityHex);
+      case EnvelopeType.reaction:
+        await _onReaction(env, identityHex);
       case EnvelopeType.fragmentStart:
       case EnvelopeType.fragmentCont:
       case EnvelopeType.fragmentEnd:

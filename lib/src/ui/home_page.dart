@@ -4,6 +4,7 @@ import '../chat/chat_service.dart';
 import '../data/database.dart';
 import '../transport/transport_api.g.dart';
 import 'conversation_page.dart';
+import 'theme.dart';
 
 /// A short, human-ish label for a peer: their nickname, else announced name,
 /// else "Peer XXXX".
@@ -38,8 +39,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Coming back to the foreground: restart scan/advertise, re-arm reconnects
-      // to known peers, drain the inbox and flush the outbox.
       service.resume();
     }
   }
@@ -56,9 +55,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           controller: controller,
           autofocus: true,
           textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(
-            hintText: 'What nearby people see',
-          ),
+          decoration: const InputDecoration(hintText: 'What nearby people see'),
         ),
         actions: [
           TextButton(
@@ -87,16 +84,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('stonechat'),
+        title: const Text(
+          'stonechat',
+          style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: -0.3),
+        ),
         actions: [
           IconButton(
             tooltip: 'Reconnect',
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh_rounded),
             onPressed: () {
               service.resume();
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text('Reconnecting to nearby devices…'),
+                  content: Text('Reconnecting…'),
                   duration: Duration(seconds: 2),
                 ),
               );
@@ -104,9 +104,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
           IconButton(
             tooltip: 'Your name',
-            icon: const Icon(Icons.badge_outlined),
+            icon: const Icon(Icons.account_circle_outlined),
             onPressed: _editMyName,
           ),
+          const SizedBox(width: 4),
         ],
       ),
       body: Column(
@@ -117,29 +118,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               stream: db.watchPeers(),
               builder: (context, snapshot) {
                 final peers = snapshot.data ?? const [];
-                if (peers.isEmpty) {
-                  return const _EmptyState();
-                }
+                if (peers.isEmpty) return const _EmptyState();
                 return ValueListenableBuilder<Set<String>>(
                   valueListenable: service.onlineIdentities,
                   builder: (context, online, _) {
                     return ListView.separated(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
                       itemCount: peers.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      separatorBuilder: (_, _) => const Padding(
+                        padding: EdgeInsets.only(left: 78),
+                        child: Divider(height: 1),
+                      ),
                       itemBuilder: (context, i) {
                         final peer = peers[i];
-                        final isOnline = online.contains(peer.id);
-                        return ListTile(
-                          leading: _PresenceDot(online: isOnline),
-                          title: Text(peerLabel(peer)),
-                          subtitle: Text(
-                            peer.id.substring(0, peer.id.length.clamp(0, 16)),
-                            style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                            ),
-                          ),
-                          trailing: const Icon(Icons.chevron_right),
+                        return _PeerRow(
+                          peer: peer,
+                          online: online.contains(peer.id),
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute<void>(
                               builder: (_) => ConversationPage(
@@ -163,6 +157,118 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 }
 
+class _PeerRow extends StatelessWidget {
+  const _PeerRow({
+    required this.peer,
+    required this.online,
+    required this.onTap,
+  });
+
+  final Peer peer;
+  final bool online;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = peerLabel(peer);
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+        child: Row(
+          children: [
+            _Monogram(label: label, online: online),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Stone.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    online ? 'Active now' : 'Tap to chat',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: online ? Stone.online : Stone.inkDim,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: Stone.inkFaint),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Monogram extends StatelessWidget {
+  const _Monogram({required this.label, required this.online});
+  final String label;
+  final bool online;
+
+  @override
+  Widget build(BuildContext context) {
+    final initial =
+        label.trim().isEmpty ? '?' : label.trim().characters.first.toUpperCase();
+    return SizedBox(
+      width: 48,
+      height: 48,
+      child: Stack(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF2A2F3A), Color(0xFF1B1F28)],
+              ),
+              border: online
+                  ? Border.all(color: Stone.online, width: 2)
+                  : Border.all(color: Stone.hairline, width: 1),
+            ),
+            child: Text(
+              initial,
+              style: const TextStyle(
+                color: Stone.accent,
+                fontWeight: FontWeight.w700,
+                fontSize: 20,
+              ),
+            ),
+          ),
+          if (online)
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Container(
+                width: 13,
+                height: 13,
+                decoration: BoxDecoration(
+                  color: Stone.online,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Stone.bg, width: 2.5),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A subtle status strip, shown only when the radio isn't simply running.
 class _AdapterBanner extends StatelessWidget {
   const _AdapterBanner({required this.service});
 
@@ -173,41 +279,28 @@ class _AdapterBanner extends StatelessWidget {
     return ValueListenableBuilder<BleAdapterState>(
       valueListenable: service.adapterState,
       builder: (context, state, _) {
+        if (state == BleAdapterState.poweredOn) return const SizedBox.shrink();
         final (text, color) = switch (state) {
-          BleAdapterState.poweredOn => ('Scanning for nearby devices…', Colors.teal),
-          BleAdapterState.poweredOff => ('Bluetooth is off', Colors.red),
-          BleAdapterState.unauthorized => ('Bluetooth permission denied', Colors.red),
-          BleAdapterState.unsupported => ('Bluetooth not supported', Colors.red),
-          _ => ('Starting Bluetooth…', Colors.orange),
+          BleAdapterState.poweredOff => ('Bluetooth is off', Color(0xFFF87171)),
+          BleAdapterState.unauthorized =>
+            ('Bluetooth permission denied', Color(0xFFF87171)),
+          BleAdapterState.unsupported =>
+            ('Bluetooth not supported', Color(0xFFF87171)),
+          _ => ('Starting Bluetooth…', Stone.accent),
         };
         return Container(
           width: double.infinity,
-          color: color.withValues(alpha: 0.12),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          color: color.withValues(alpha: 0.10),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
           child: Row(
             children: [
-              Icon(Icons.bluetooth, size: 18, color: color),
+              Icon(Icons.bluetooth, size: 16, color: color),
               const SizedBox(width: 8),
-              Text(text, style: TextStyle(color: color)),
+              Text(text, style: TextStyle(color: color, fontSize: 13)),
             ],
           ),
         );
       },
-    );
-  }
-}
-
-class _PresenceDot extends StatelessWidget {
-  const _PresenceDot({required this.online});
-
-  final bool online;
-
-  @override
-  Widget build(BuildContext context) {
-    return Icon(
-      Icons.circle,
-      size: 14,
-      color: online ? Colors.green : Colors.grey,
     );
   }
 }
@@ -217,13 +310,37 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    return Center(
       child: Padding(
-        padding: EdgeInsets.all(32),
-        child: Text(
-          'No peers yet.\n\nBring another stonechat device nearby, '
-          'in the foreground, to exchange a hello.',
-          textAlign: TextAlign.center,
+        padding: const EdgeInsets.all(40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              alignment: Alignment.center,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Stone.surfaceHigh,
+              ),
+              child: const Icon(Icons.bluetooth_searching_rounded,
+                  size: 30, color: Stone.accent),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'No one here yet',
+              style: TextStyle(
+                  fontSize: 19, fontWeight: FontWeight.w700, color: Stone.ink),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Open stonechat on another phone nearby to find each other — or '
+              'connect over the internet once you’ve met once.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, height: 1.45, color: Stone.inkDim),
+            ),
+          ],
         ),
       ),
     );

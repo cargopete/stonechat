@@ -552,6 +552,17 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.blob,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _replyToMessageIdMeta = const VerificationMeta(
+    'replyToMessageId',
+  );
+  @override
+  late final GeneratedColumn<String> replyToMessageId = GeneratedColumn<String>(
+    'reply_to_message_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _envelopeMeta = const VerificationMeta(
     'envelope',
   );
@@ -574,6 +585,7 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     state,
     createdAtMs,
     mediaBytes,
+    replyToMessageId,
     envelope,
   ];
   @override
@@ -640,6 +652,15 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         mediaBytes.isAcceptableOrUnknown(data['media_bytes']!, _mediaBytesMeta),
       );
     }
+    if (data.containsKey('reply_to_message_id')) {
+      context.handle(
+        _replyToMessageIdMeta,
+        replyToMessageId.isAcceptableOrUnknown(
+          data['reply_to_message_id']!,
+          _replyToMessageIdMeta,
+        ),
+      );
+    }
     if (data.containsKey('envelope')) {
       context.handle(
         _envelopeMeta,
@@ -697,6 +718,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.blob,
         data['${effectivePrefix}media_bytes'],
       ),
+      replyToMessageId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}reply_to_message_id'],
+      ),
       envelope: attachedDatabase.typeMapping.read(
         DriftSqlType.blob,
         data['${effectivePrefix}envelope'],
@@ -735,6 +760,10 @@ class Message extends DataClass implements Insertable<Message> {
   /// rest with the rest of the DB. Null for text messages.
   final Uint8List? mediaBytes;
 
+  /// The messageId this message is a reply to, or null. Resolved against the
+  /// messages table to render the quoted snippet.
+  final String? replyToMessageId;
+
   /// The sealed envelope bytes for an outbound message, kept so the outbox can
   /// re-send the *identical* bytes (same message_id) on reconnect — which is
   /// what preserves dedup + ACK matching. Null for inbound messages.
@@ -749,6 +778,7 @@ class Message extends DataClass implements Insertable<Message> {
     required this.state,
     required this.createdAtMs,
     this.mediaBytes,
+    this.replyToMessageId,
     this.envelope,
   });
   @override
@@ -773,6 +803,9 @@ class Message extends DataClass implements Insertable<Message> {
     if (!nullToAbsent || mediaBytes != null) {
       map['media_bytes'] = Variable<Uint8List>(mediaBytes);
     }
+    if (!nullToAbsent || replyToMessageId != null) {
+      map['reply_to_message_id'] = Variable<String>(replyToMessageId);
+    }
     if (!nullToAbsent || envelope != null) {
       map['envelope'] = Variable<Uint8List>(envelope);
     }
@@ -792,6 +825,9 @@ class Message extends DataClass implements Insertable<Message> {
       mediaBytes: mediaBytes == null && nullToAbsent
           ? const Value.absent()
           : Value(mediaBytes),
+      replyToMessageId: replyToMessageId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(replyToMessageId),
       envelope: envelope == null && nullToAbsent
           ? const Value.absent()
           : Value(envelope),
@@ -819,6 +855,7 @@ class Message extends DataClass implements Insertable<Message> {
       ),
       createdAtMs: serializer.fromJson<int>(json['createdAtMs']),
       mediaBytes: serializer.fromJson<Uint8List?>(json['mediaBytes']),
+      replyToMessageId: serializer.fromJson<String?>(json['replyToMessageId']),
       envelope: serializer.fromJson<Uint8List?>(json['envelope']),
     );
   }
@@ -841,6 +878,7 @@ class Message extends DataClass implements Insertable<Message> {
       ),
       'createdAtMs': serializer.toJson<int>(createdAtMs),
       'mediaBytes': serializer.toJson<Uint8List?>(mediaBytes),
+      'replyToMessageId': serializer.toJson<String?>(replyToMessageId),
       'envelope': serializer.toJson<Uint8List?>(envelope),
     };
   }
@@ -855,6 +893,7 @@ class Message extends DataClass implements Insertable<Message> {
     MessageDeliveryState? state,
     int? createdAtMs,
     Value<Uint8List?> mediaBytes = const Value.absent(),
+    Value<String?> replyToMessageId = const Value.absent(),
     Value<Uint8List?> envelope = const Value.absent(),
   }) => Message(
     messageId: messageId ?? this.messageId,
@@ -866,6 +905,9 @@ class Message extends DataClass implements Insertable<Message> {
     state: state ?? this.state,
     createdAtMs: createdAtMs ?? this.createdAtMs,
     mediaBytes: mediaBytes.present ? mediaBytes.value : this.mediaBytes,
+    replyToMessageId: replyToMessageId.present
+        ? replyToMessageId.value
+        : this.replyToMessageId,
     envelope: envelope.present ? envelope.value : this.envelope,
   );
   Message copyWithCompanion(MessagesCompanion data) {
@@ -885,6 +927,9 @@ class Message extends DataClass implements Insertable<Message> {
       mediaBytes: data.mediaBytes.present
           ? data.mediaBytes.value
           : this.mediaBytes,
+      replyToMessageId: data.replyToMessageId.present
+          ? data.replyToMessageId.value
+          : this.replyToMessageId,
       envelope: data.envelope.present ? data.envelope.value : this.envelope,
     );
   }
@@ -901,6 +946,7 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('state: $state, ')
           ..write('createdAtMs: $createdAtMs, ')
           ..write('mediaBytes: $mediaBytes, ')
+          ..write('replyToMessageId: $replyToMessageId, ')
           ..write('envelope: $envelope')
           ..write(')'))
         .toString();
@@ -917,6 +963,7 @@ class Message extends DataClass implements Insertable<Message> {
     state,
     createdAtMs,
     $driftBlobEquality.hash(mediaBytes),
+    replyToMessageId,
     $driftBlobEquality.hash(envelope),
   );
   @override
@@ -932,6 +979,7 @@ class Message extends DataClass implements Insertable<Message> {
           other.state == this.state &&
           other.createdAtMs == this.createdAtMs &&
           $driftBlobEquality.equals(other.mediaBytes, this.mediaBytes) &&
+          other.replyToMessageId == this.replyToMessageId &&
           $driftBlobEquality.equals(other.envelope, this.envelope));
 }
 
@@ -945,6 +993,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<MessageDeliveryState> state;
   final Value<int> createdAtMs;
   final Value<Uint8List?> mediaBytes;
+  final Value<String?> replyToMessageId;
   final Value<Uint8List?> envelope;
   final Value<int> rowid;
   const MessagesCompanion({
@@ -957,6 +1006,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.state = const Value.absent(),
     this.createdAtMs = const Value.absent(),
     this.mediaBytes = const Value.absent(),
+    this.replyToMessageId = const Value.absent(),
     this.envelope = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -970,6 +1020,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     required MessageDeliveryState state,
     required int createdAtMs,
     this.mediaBytes = const Value.absent(),
+    this.replyToMessageId = const Value.absent(),
     this.envelope = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : messageId = Value(messageId),
@@ -989,6 +1040,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<int>? state,
     Expression<int>? createdAtMs,
     Expression<Uint8List>? mediaBytes,
+    Expression<String>? replyToMessageId,
     Expression<Uint8List>? envelope,
     Expression<int>? rowid,
   }) {
@@ -1002,6 +1054,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (state != null) 'state': state,
       if (createdAtMs != null) 'created_at_ms': createdAtMs,
       if (mediaBytes != null) 'media_bytes': mediaBytes,
+      if (replyToMessageId != null) 'reply_to_message_id': replyToMessageId,
       if (envelope != null) 'envelope': envelope,
       if (rowid != null) 'rowid': rowid,
     });
@@ -1017,6 +1070,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<MessageDeliveryState>? state,
     Value<int>? createdAtMs,
     Value<Uint8List?>? mediaBytes,
+    Value<String?>? replyToMessageId,
     Value<Uint8List?>? envelope,
     Value<int>? rowid,
   }) {
@@ -1030,6 +1084,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       state: state ?? this.state,
       createdAtMs: createdAtMs ?? this.createdAtMs,
       mediaBytes: mediaBytes ?? this.mediaBytes,
+      replyToMessageId: replyToMessageId ?? this.replyToMessageId,
       envelope: envelope ?? this.envelope,
       rowid: rowid ?? this.rowid,
     );
@@ -1071,6 +1126,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (mediaBytes.present) {
       map['media_bytes'] = Variable<Uint8List>(mediaBytes.value);
     }
+    if (replyToMessageId.present) {
+      map['reply_to_message_id'] = Variable<String>(replyToMessageId.value);
+    }
     if (envelope.present) {
       map['envelope'] = Variable<Uint8List>(envelope.value);
     }
@@ -1092,6 +1150,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('state: $state, ')
           ..write('createdAtMs: $createdAtMs, ')
           ..write('mediaBytes: $mediaBytes, ')
+          ..write('replyToMessageId: $replyToMessageId, ')
           ..write('envelope: $envelope, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -1304,12 +1363,383 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
   }
 }
 
+class $ReactionsTable extends Reactions
+    with TableInfo<$ReactionsTable, Reaction> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ReactionsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _messageIdMeta = const VerificationMeta(
+    'messageId',
+  );
+  @override
+  late final GeneratedColumn<String> messageId = GeneratedColumn<String>(
+    'message_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _peerIdMeta = const VerificationMeta('peerId');
+  @override
+  late final GeneratedColumn<String> peerId = GeneratedColumn<String>(
+    'peer_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _fromMeMeta = const VerificationMeta('fromMe');
+  @override
+  late final GeneratedColumn<bool> fromMe = GeneratedColumn<bool>(
+    'from_me',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("from_me" IN (0, 1))',
+    ),
+  );
+  static const VerificationMeta _emojiMeta = const VerificationMeta('emoji');
+  @override
+  late final GeneratedColumn<String> emoji = GeneratedColumn<String>(
+    'emoji',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMsMeta = const VerificationMeta(
+    'createdAtMs',
+  );
+  @override
+  late final GeneratedColumn<int> createdAtMs = GeneratedColumn<int>(
+    'created_at_ms',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    messageId,
+    peerId,
+    fromMe,
+    emoji,
+    createdAtMs,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'reactions';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<Reaction> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('message_id')) {
+      context.handle(
+        _messageIdMeta,
+        messageId.isAcceptableOrUnknown(data['message_id']!, _messageIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_messageIdMeta);
+    }
+    if (data.containsKey('peer_id')) {
+      context.handle(
+        _peerIdMeta,
+        peerId.isAcceptableOrUnknown(data['peer_id']!, _peerIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_peerIdMeta);
+    }
+    if (data.containsKey('from_me')) {
+      context.handle(
+        _fromMeMeta,
+        fromMe.isAcceptableOrUnknown(data['from_me']!, _fromMeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_fromMeMeta);
+    }
+    if (data.containsKey('emoji')) {
+      context.handle(
+        _emojiMeta,
+        emoji.isAcceptableOrUnknown(data['emoji']!, _emojiMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_emojiMeta);
+    }
+    if (data.containsKey('created_at_ms')) {
+      context.handle(
+        _createdAtMsMeta,
+        createdAtMs.isAcceptableOrUnknown(
+          data['created_at_ms']!,
+          _createdAtMsMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMsMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {messageId, fromMe};
+  @override
+  Reaction map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Reaction(
+      messageId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}message_id'],
+      )!,
+      peerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}peer_id'],
+      )!,
+      fromMe: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}from_me'],
+      )!,
+      emoji: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}emoji'],
+      )!,
+      createdAtMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at_ms'],
+      )!,
+    );
+  }
+
+  @override
+  $ReactionsTable createAlias(String alias) {
+    return $ReactionsTable(attachedDatabase, alias);
+  }
+}
+
+class Reaction extends DataClass implements Insertable<Reaction> {
+  final String messageId;
+  final String peerId;
+  final bool fromMe;
+  final String emoji;
+  final int createdAtMs;
+  const Reaction({
+    required this.messageId,
+    required this.peerId,
+    required this.fromMe,
+    required this.emoji,
+    required this.createdAtMs,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['message_id'] = Variable<String>(messageId);
+    map['peer_id'] = Variable<String>(peerId);
+    map['from_me'] = Variable<bool>(fromMe);
+    map['emoji'] = Variable<String>(emoji);
+    map['created_at_ms'] = Variable<int>(createdAtMs);
+    return map;
+  }
+
+  ReactionsCompanion toCompanion(bool nullToAbsent) {
+    return ReactionsCompanion(
+      messageId: Value(messageId),
+      peerId: Value(peerId),
+      fromMe: Value(fromMe),
+      emoji: Value(emoji),
+      createdAtMs: Value(createdAtMs),
+    );
+  }
+
+  factory Reaction.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Reaction(
+      messageId: serializer.fromJson<String>(json['messageId']),
+      peerId: serializer.fromJson<String>(json['peerId']),
+      fromMe: serializer.fromJson<bool>(json['fromMe']),
+      emoji: serializer.fromJson<String>(json['emoji']),
+      createdAtMs: serializer.fromJson<int>(json['createdAtMs']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'messageId': serializer.toJson<String>(messageId),
+      'peerId': serializer.toJson<String>(peerId),
+      'fromMe': serializer.toJson<bool>(fromMe),
+      'emoji': serializer.toJson<String>(emoji),
+      'createdAtMs': serializer.toJson<int>(createdAtMs),
+    };
+  }
+
+  Reaction copyWith({
+    String? messageId,
+    String? peerId,
+    bool? fromMe,
+    String? emoji,
+    int? createdAtMs,
+  }) => Reaction(
+    messageId: messageId ?? this.messageId,
+    peerId: peerId ?? this.peerId,
+    fromMe: fromMe ?? this.fromMe,
+    emoji: emoji ?? this.emoji,
+    createdAtMs: createdAtMs ?? this.createdAtMs,
+  );
+  Reaction copyWithCompanion(ReactionsCompanion data) {
+    return Reaction(
+      messageId: data.messageId.present ? data.messageId.value : this.messageId,
+      peerId: data.peerId.present ? data.peerId.value : this.peerId,
+      fromMe: data.fromMe.present ? data.fromMe.value : this.fromMe,
+      emoji: data.emoji.present ? data.emoji.value : this.emoji,
+      createdAtMs: data.createdAtMs.present
+          ? data.createdAtMs.value
+          : this.createdAtMs,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Reaction(')
+          ..write('messageId: $messageId, ')
+          ..write('peerId: $peerId, ')
+          ..write('fromMe: $fromMe, ')
+          ..write('emoji: $emoji, ')
+          ..write('createdAtMs: $createdAtMs')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(messageId, peerId, fromMe, emoji, createdAtMs);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Reaction &&
+          other.messageId == this.messageId &&
+          other.peerId == this.peerId &&
+          other.fromMe == this.fromMe &&
+          other.emoji == this.emoji &&
+          other.createdAtMs == this.createdAtMs);
+}
+
+class ReactionsCompanion extends UpdateCompanion<Reaction> {
+  final Value<String> messageId;
+  final Value<String> peerId;
+  final Value<bool> fromMe;
+  final Value<String> emoji;
+  final Value<int> createdAtMs;
+  final Value<int> rowid;
+  const ReactionsCompanion({
+    this.messageId = const Value.absent(),
+    this.peerId = const Value.absent(),
+    this.fromMe = const Value.absent(),
+    this.emoji = const Value.absent(),
+    this.createdAtMs = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ReactionsCompanion.insert({
+    required String messageId,
+    required String peerId,
+    required bool fromMe,
+    required String emoji,
+    required int createdAtMs,
+    this.rowid = const Value.absent(),
+  }) : messageId = Value(messageId),
+       peerId = Value(peerId),
+       fromMe = Value(fromMe),
+       emoji = Value(emoji),
+       createdAtMs = Value(createdAtMs);
+  static Insertable<Reaction> custom({
+    Expression<String>? messageId,
+    Expression<String>? peerId,
+    Expression<bool>? fromMe,
+    Expression<String>? emoji,
+    Expression<int>? createdAtMs,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (messageId != null) 'message_id': messageId,
+      if (peerId != null) 'peer_id': peerId,
+      if (fromMe != null) 'from_me': fromMe,
+      if (emoji != null) 'emoji': emoji,
+      if (createdAtMs != null) 'created_at_ms': createdAtMs,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ReactionsCompanion copyWith({
+    Value<String>? messageId,
+    Value<String>? peerId,
+    Value<bool>? fromMe,
+    Value<String>? emoji,
+    Value<int>? createdAtMs,
+    Value<int>? rowid,
+  }) {
+    return ReactionsCompanion(
+      messageId: messageId ?? this.messageId,
+      peerId: peerId ?? this.peerId,
+      fromMe: fromMe ?? this.fromMe,
+      emoji: emoji ?? this.emoji,
+      createdAtMs: createdAtMs ?? this.createdAtMs,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (messageId.present) {
+      map['message_id'] = Variable<String>(messageId.value);
+    }
+    if (peerId.present) {
+      map['peer_id'] = Variable<String>(peerId.value);
+    }
+    if (fromMe.present) {
+      map['from_me'] = Variable<bool>(fromMe.value);
+    }
+    if (emoji.present) {
+      map['emoji'] = Variable<String>(emoji.value);
+    }
+    if (createdAtMs.present) {
+      map['created_at_ms'] = Variable<int>(createdAtMs.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ReactionsCompanion(')
+          ..write('messageId: $messageId, ')
+          ..write('peerId: $peerId, ')
+          ..write('fromMe: $fromMe, ')
+          ..write('emoji: $emoji, ')
+          ..write('createdAtMs: $createdAtMs, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $PeersTable peers = $PeersTable(this);
   late final $MessagesTable messages = $MessagesTable(this);
   late final $SettingsTable settings = $SettingsTable(this);
+  late final $ReactionsTable reactions = $ReactionsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1318,6 +1748,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     peers,
     messages,
     settings,
+    reactions,
   ];
 }
 
@@ -1650,6 +2081,7 @@ typedef $$MessagesTableCreateCompanionBuilder =
       required MessageDeliveryState state,
       required int createdAtMs,
       Value<Uint8List?> mediaBytes,
+      Value<String?> replyToMessageId,
       Value<Uint8List?> envelope,
       Value<int> rowid,
     });
@@ -1664,6 +2096,7 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<MessageDeliveryState> state,
       Value<int> createdAtMs,
       Value<Uint8List?> mediaBytes,
+      Value<String?> replyToMessageId,
       Value<Uint8List?> envelope,
       Value<int> rowid,
     });
@@ -1747,6 +2180,11 @@ class $$MessagesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get replyToMessageId => $composableBuilder(
+    column: $table.replyToMessageId,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<Uint8List> get envelope => $composableBuilder(
     column: $table.envelope,
     builder: (column) => ColumnFilters(column),
@@ -1825,6 +2263,11 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get replyToMessageId => $composableBuilder(
+    column: $table.replyToMessageId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<Uint8List> get envelope => $composableBuilder(
     column: $table.envelope,
     builder: (column) => ColumnOrderings(column),
@@ -1893,6 +2336,11 @@ class $$MessagesTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<String> get replyToMessageId => $composableBuilder(
+    column: $table.replyToMessageId,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<Uint8List> get envelope =>
       $composableBuilder(column: $table.envelope, builder: (column) => column);
 
@@ -1957,6 +2405,7 @@ class $$MessagesTableTableManager
                 Value<MessageDeliveryState> state = const Value.absent(),
                 Value<int> createdAtMs = const Value.absent(),
                 Value<Uint8List?> mediaBytes = const Value.absent(),
+                Value<String?> replyToMessageId = const Value.absent(),
                 Value<Uint8List?> envelope = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion(
@@ -1969,6 +2418,7 @@ class $$MessagesTableTableManager
                 state: state,
                 createdAtMs: createdAtMs,
                 mediaBytes: mediaBytes,
+                replyToMessageId: replyToMessageId,
                 envelope: envelope,
                 rowid: rowid,
               ),
@@ -1983,6 +2433,7 @@ class $$MessagesTableTableManager
                 required MessageDeliveryState state,
                 required int createdAtMs,
                 Value<Uint8List?> mediaBytes = const Value.absent(),
+                Value<String?> replyToMessageId = const Value.absent(),
                 Value<Uint8List?> envelope = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion.insert(
@@ -1995,6 +2446,7 @@ class $$MessagesTableTableManager
                 state: state,
                 createdAtMs: createdAtMs,
                 mediaBytes: mediaBytes,
+                replyToMessageId: replyToMessageId,
                 envelope: envelope,
                 rowid: rowid,
               ),
@@ -2198,6 +2650,202 @@ typedef $$SettingsTableProcessedTableManager =
       Setting,
       PrefetchHooks Function()
     >;
+typedef $$ReactionsTableCreateCompanionBuilder =
+    ReactionsCompanion Function({
+      required String messageId,
+      required String peerId,
+      required bool fromMe,
+      required String emoji,
+      required int createdAtMs,
+      Value<int> rowid,
+    });
+typedef $$ReactionsTableUpdateCompanionBuilder =
+    ReactionsCompanion Function({
+      Value<String> messageId,
+      Value<String> peerId,
+      Value<bool> fromMe,
+      Value<String> emoji,
+      Value<int> createdAtMs,
+      Value<int> rowid,
+    });
+
+class $$ReactionsTableFilterComposer
+    extends Composer<_$AppDatabase, $ReactionsTable> {
+  $$ReactionsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get messageId => $composableBuilder(
+    column: $table.messageId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get peerId => $composableBuilder(
+    column: $table.peerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get fromMe => $composableBuilder(
+    column: $table.fromMe,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get emoji => $composableBuilder(
+    column: $table.emoji,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAtMs => $composableBuilder(
+    column: $table.createdAtMs,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$ReactionsTableOrderingComposer
+    extends Composer<_$AppDatabase, $ReactionsTable> {
+  $$ReactionsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get messageId => $composableBuilder(
+    column: $table.messageId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get peerId => $composableBuilder(
+    column: $table.peerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get fromMe => $composableBuilder(
+    column: $table.fromMe,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get emoji => $composableBuilder(
+    column: $table.emoji,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAtMs => $composableBuilder(
+    column: $table.createdAtMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$ReactionsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $ReactionsTable> {
+  $$ReactionsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get messageId =>
+      $composableBuilder(column: $table.messageId, builder: (column) => column);
+
+  GeneratedColumn<String> get peerId =>
+      $composableBuilder(column: $table.peerId, builder: (column) => column);
+
+  GeneratedColumn<bool> get fromMe =>
+      $composableBuilder(column: $table.fromMe, builder: (column) => column);
+
+  GeneratedColumn<String> get emoji =>
+      $composableBuilder(column: $table.emoji, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAtMs => $composableBuilder(
+    column: $table.createdAtMs,
+    builder: (column) => column,
+  );
+}
+
+class $$ReactionsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $ReactionsTable,
+          Reaction,
+          $$ReactionsTableFilterComposer,
+          $$ReactionsTableOrderingComposer,
+          $$ReactionsTableAnnotationComposer,
+          $$ReactionsTableCreateCompanionBuilder,
+          $$ReactionsTableUpdateCompanionBuilder,
+          (Reaction, BaseReferences<_$AppDatabase, $ReactionsTable, Reaction>),
+          Reaction,
+          PrefetchHooks Function()
+        > {
+  $$ReactionsTableTableManager(_$AppDatabase db, $ReactionsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ReactionsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ReactionsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ReactionsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> messageId = const Value.absent(),
+                Value<String> peerId = const Value.absent(),
+                Value<bool> fromMe = const Value.absent(),
+                Value<String> emoji = const Value.absent(),
+                Value<int> createdAtMs = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => ReactionsCompanion(
+                messageId: messageId,
+                peerId: peerId,
+                fromMe: fromMe,
+                emoji: emoji,
+                createdAtMs: createdAtMs,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String messageId,
+                required String peerId,
+                required bool fromMe,
+                required String emoji,
+                required int createdAtMs,
+                Value<int> rowid = const Value.absent(),
+              }) => ReactionsCompanion.insert(
+                messageId: messageId,
+                peerId: peerId,
+                fromMe: fromMe,
+                emoji: emoji,
+                createdAtMs: createdAtMs,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$ReactionsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $ReactionsTable,
+      Reaction,
+      $$ReactionsTableFilterComposer,
+      $$ReactionsTableOrderingComposer,
+      $$ReactionsTableAnnotationComposer,
+      $$ReactionsTableCreateCompanionBuilder,
+      $$ReactionsTableUpdateCompanionBuilder,
+      (Reaction, BaseReferences<_$AppDatabase, $ReactionsTable, Reaction>),
+      Reaction,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -2208,4 +2856,6 @@ class $AppDatabaseManager {
       $$MessagesTableTableManager(_db, _db.messages);
   $$SettingsTableTableManager get settings =>
       $$SettingsTableTableManager(_db, _db.settings);
+  $$ReactionsTableTableManager get reactions =>
+      $$ReactionsTableTableManager(_db, _db.reactions);
 }

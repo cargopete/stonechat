@@ -73,6 +73,10 @@ class Messages extends Table {
   /// rest with the rest of the DB. Null for text messages.
   BlobColumn get mediaBytes => blob().nullable()();
 
+  /// The messageId this message is a reply to, or null. Resolved against the
+  /// messages table to render the quoted snippet.
+  TextColumn get replyToMessageId => text().nullable()();
+
   /// The sealed envelope bytes for an outbound message, kept so the outbox can
   /// re-send the *identical* bytes (same message_id) on reconnect — which is
   /// what preserves dedup + ACK matching. Null for inbound messages.
@@ -80,6 +84,20 @@ class Messages extends Table {
 
   @override
   Set<Column> get primaryKey => {messageId};
+}
+
+/// A tapback-style reaction on a message. Each side (me / the peer) has at most
+/// one reaction per message (a new one replaces it; an empty emoji removes it),
+/// so the primary key is (messageId, fromMe).
+class Reactions extends Table {
+  TextColumn get messageId => text()();
+  TextColumn get peerId => text()();
+  BoolColumn get fromMe => boolean()();
+  TextColumn get emoji => text()();
+  IntColumn get createdAtMs => integer()();
+
+  @override
+  Set<Column> get primaryKey => {messageId, fromMe};
 }
 
 /// A tiny key/value store for app-level settings (e.g. the user's own display
@@ -92,12 +110,12 @@ class Settings extends Table {
   Set<Column> get primaryKey => {key};
 }
 
-@DriftDatabase(tables: [Peers, Messages, Settings])
+@DriftDatabase(tables: [Peers, Messages, Settings, Reactions])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -112,6 +130,11 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(messages, messages.kind);
             await m.addColumn(messages, messages.mediaBytes);
             await m.createTable(settings);
+          }
+          // v4: replies + reactions.
+          if (from < 4) {
+            await m.addColumn(messages, messages.replyToMessageId);
+            await m.createTable(reactions);
           }
         },
       );
@@ -202,6 +225,43 @@ class AppDatabase extends _$AppDatabase {
               ])))
         .get();
   }
+
+  Future<Message?> messageById(String messageId) =>
+      (select(messages)..where((m) => m.messageId.equals(messageId)))
+          .getSingleOrNull();
+
+  // --- Reactions ----------------------------------------------------------
+
+  /// Sets (or replaces) a reaction for a side; an empty emoji clears it.
+  Future<void> setReaction(
+    String messageId,
+    String peerId,
+    bool fromMe,
+    String emoji,
+  ) async {
+    if (emoji.isEmpty) {
+      await removeReaction(messageId, fromMe);
+      return;
+    }
+    await into(reactions).insertOnConflictUpdate(
+      ReactionsCompanion.insert(
+        messageId: messageId,
+        peerId: peerId,
+        fromMe: fromMe,
+        emoji: emoji,
+        createdAtMs: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+  }
+
+  Future<void> removeReaction(String messageId, bool fromMe) =>
+      (delete(reactions)
+            ..where((r) => r.messageId.equals(messageId) & r.fromMe.equals(fromMe)))
+          .go();
+
+  /// Reactions for a whole conversation, for the UI to map by messageId.
+  Stream<List<Reaction>> watchReactions(String peerId) =>
+      (select(reactions)..where((r) => r.peerId.equals(peerId))).watch();
 
   // --- Settings -----------------------------------------------------------
 

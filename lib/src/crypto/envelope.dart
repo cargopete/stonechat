@@ -29,7 +29,10 @@ enum EnvelopeType {
   // image: a photo message; payload is the (compressed) image bytes.
   announceName(6),
   read(7),
-  image(8);
+  image(8),
+  // reaction: payload is the 16-byte referenced message_id followed by the
+  // reaction emoji (UTF-8); an empty emoji clears the reaction.
+  reaction(9);
 
   const EnvelopeType(this.wire);
   final int wire;

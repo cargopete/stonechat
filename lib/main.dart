@@ -12,6 +12,7 @@ import 'src/data/database.dart';
 import 'src/relay/relay_client.dart';
 import 'src/ui/conversation_page.dart';
 import 'src/ui/home_page.dart';
+import 'src/ui/theme.dart';
 
 /// Default relay ("web" channel) URL. Overridable via the `relayUrl` setting.
 /// The sslip.io host resolves straight to the VPS, so it works without any
@@ -119,10 +120,9 @@ class StonechatApp extends StatelessWidget {
     return MaterialApp(
       title: 'stonechat',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
-        useMaterial3: true,
-      ),
+      theme: stonechatTheme(),
+      darkTheme: stonechatTheme(),
+      themeMode: ThemeMode.dark,
       home: const _Bootstrapper(),
     );
   }
