@@ -3,13 +3,14 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:gal/gal.dart';
 
-/// Fullscreen photo viewer: pinch-to-zoom, a shared-element Hero transition from
-/// the bubble, and a one-tap save to the photo library.
+/// Fullscreen photo viewer: pinch-to-zoom and a one-tap save to the photo
+/// library. The image is given an explicit screen-sized box so `BoxFit.contain`
+/// fills the view (without it, a small source renders at its tiny intrinsic
+/// size).
 class ImageViewerPage extends StatelessWidget {
-  const ImageViewerPage({super.key, required this.bytes, required this.heroTag});
+  const ImageViewerPage({super.key, required this.bytes});
 
   final Uint8List bytes;
-  final String heroTag;
 
   Future<void> _save(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -28,40 +29,43 @@ class ImageViewerPage extends StatelessWidget {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
+        fit: StackFit.expand,
         children: [
-          Positioned.fill(
-            child: GestureDetector(
-              onTap: () => Navigator.of(context).maybePop(),
-              child: InteractiveViewer(
+          GestureDetector(
+            onTap: () => Navigator.of(context).maybePop(),
+            child: LayoutBuilder(
+              builder: (context, constraints) => InteractiveViewer(
                 minScale: 1,
-                maxScale: 5,
-                // SizedBox.expand gives the image tight, full-viewport
-                // constraints; BoxFit.contain then scales it to fill while
-                // preserving aspect (without it, a small source renders tiny).
-                child: SizedBox.expand(
-                  child: Hero(
-                    tag: heroTag,
-                    child: Image.memory(bytes, fit: BoxFit.contain),
-                  ),
+                maxScale: 6,
+                constrained: false,
+                child: SizedBox(
+                  width: constraints.maxWidth,
+                  height: constraints.maxHeight,
+                  child: Image.memory(bytes, fit: BoxFit.contain),
                 ),
               ),
             ),
           ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _RoundButton(
-                    icon: Icons.close_rounded,
-                    onTap: () => Navigator.of(context).maybePop(),
-                  ),
-                  _RoundButton(
-                    icon: Icons.download_rounded,
-                    onTap: () => _save(context),
-                  ),
-                ],
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _RoundButton(
+                      icon: Icons.close_rounded,
+                      onTap: () => Navigator.of(context).maybePop(),
+                    ),
+                    _RoundButton(
+                      icon: Icons.download_rounded,
+                      onTap: () => _save(context),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

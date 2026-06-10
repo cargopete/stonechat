@@ -142,10 +142,10 @@ class _ConversationPageState extends State<ConversationPage> {
     if (m.mediaBytes == null) return;
     Navigator.of(context).push(
       PageRouteBuilder(
-        opaque: false,
-        barrierColor: Colors.black,
-        pageBuilder: (_, _, _) =>
-            ImageViewerPage(bytes: m.mediaBytes!, heroTag: m.messageId),
+        transitionsBuilder: (_, anim, _, child) =>
+            FadeTransition(opacity: anim, child: child),
+        transitionDuration: const Duration(milliseconds: 180),
+        pageBuilder: (_, _, _) => ImageViewerPage(bytes: m.mediaBytes!),
       ),
     );
   }
@@ -366,10 +366,7 @@ class _MessageBubble extends StatelessWidget {
             if (isImage)
               ClipRRect(
                 borderRadius: BorderRadius.circular(Stone.rBubble - 6),
-                child: Hero(
-                  tag: message.messageId,
-                  child: Image.memory(message.mediaBytes!, fit: BoxFit.cover),
-                ),
+                child: Image.memory(message.mediaBytes!, fit: BoxFit.cover),
               )
             else
               Text(
