@@ -133,10 +133,29 @@ class ChatService {
       // push anything still undelivered to the relay.
       unawaited(drainRelay());
       unawaited(_flushPendingToRelay());
+      unawaited(_registerPushIfNeeded());
     });
     await _api.startAdvertising();
     await _api.startScanning();
     await drainInbox();
+    // Pull anything relayed while we were away on this cold launch, and register
+    // for wake-up pushes once the OS hands us a token.
+    await drainRelay();
+    unawaited(_registerPushIfNeeded());
+  }
+
+  bool _pushRegistered = false;
+
+  /// Registers this device's APNs token with the relay so relayed messages can
+  /// wake it. The token arrives asynchronously after launch, so this is retried
+  /// (on each foreground/tick) until it succeeds once.
+  Future<void> _registerPushIfNeeded() async {
+    final relay = _relay;
+    if (relay == null || _pushRegistered) return;
+    final token = await _api.pushToken();
+    if (token == null || token.isEmpty) return;
+    await relay.register(token);
+    _pushRegistered = true;
   }
 
   /// Called when the app returns to the foreground (and from a manual refresh):
@@ -154,6 +173,7 @@ class ChatService {
     // still-undelivered messages to the relay for peers we can't reach by BLE.
     await drainRelay();
     await _flushPendingToRelay();
+    unawaited(_registerPushIfNeeded());
   }
 
   /// Updates the name announced to peers and re-announces to everyone currently

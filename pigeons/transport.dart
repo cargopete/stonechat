@@ -136,6 +136,11 @@ abstract class TransportHostApi {
   /// native side can name the sender in background local notifications, when
   /// Dart isn't running to do it. Persisted in the App Group UserDefaults.
   void cachePeerName(String identityHex, String name);
+
+  /// The APNs device token (hex) once the OS has handed it to us, or null if not
+  /// yet available / push isn't provisioned. Dart registers it with the relay so
+  /// relayed messages can wake this device.
+  String? pushToken();
 }
 
 @EventChannelApi()

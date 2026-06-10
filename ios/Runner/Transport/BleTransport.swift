@@ -301,6 +301,10 @@ extension BleTransport: TransportHostApi {
   func cachePeerName(identityHex: String, name: String) throws {
     PeerNameCache.set(name, for: identityHex)
   }
+
+  func pushToken() throws -> String? {
+    PushTokenStore.token
+  }
 }
 
 // MARK: - Helpers

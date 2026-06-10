@@ -10,7 +10,31 @@ import UIKit
     // Create the CB managers before the Flutter engine so iOS can relaunch us
     // into the background on a BLE event (State Restoration).
     BleTransport.shared.prepareForRestoration()
+    // Ask the OS for an APNs device token (the relay uses it to wake us). This
+    // is independent of the alert-permission prompt; the token arrives in
+    // didRegisterForRemoteNotificationsWithDeviceToken. Harmless (logs a failure)
+    // until the Push Notifications capability is provisioned.
+    application.registerForRemoteNotifications()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+  ) {
+    let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+    PushTokenStore.set(hex)
+    super.application(
+      application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didFailToRegisterForRemoteNotificationsWithError error: Error
+  ) {
+    NSLog("stonechat: APNs registration failed: \(error.localizedDescription)")
+    super.application(
+      application, didFailToRegisterForRemoteNotificationsWithError: error)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {

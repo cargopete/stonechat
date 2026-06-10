@@ -64,3 +64,16 @@ enum PeerNameCache {
     defaults.string(forKey: key(identityHex))
   }
 }
+
+/// Stores the APNs device token (hex) in the App Group UserDefaults, so the Dart
+/// side can read it back (via the `pushToken` HostApi) and register it with the
+/// relay for wake-up pushes.
+enum PushTokenStore {
+  private static var defaults: UserDefaults {
+    UserDefaults(suiteName: SharedContainer.appGroupId) ?? .standard
+  }
+  private static let storeKey = "apnsDeviceToken"
+
+  static func set(_ token: String) { defaults.set(token, forKey: storeKey) }
+  static var token: String? { defaults.string(forKey: storeKey) }
+}

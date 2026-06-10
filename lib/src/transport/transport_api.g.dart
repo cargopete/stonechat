@@ -704,6 +704,28 @@ class TransportHostApi {
     )
     ;
   }
+
+  /// The APNs device token (hex) once the OS has handed it to us, or null if not
+  /// yet available / push isn't provisioned. Dart registers it with the relay so
+  /// relayed messages can wake this device.
+  Future<String?> pushToken() async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.stonechat.TransportHostApi.pushToken$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
+    return pigeonVar_replyValue as String?;
+  }
 }
 
 Stream<TransportEvent> streamTransportEvents( {String instanceName = ''}) {

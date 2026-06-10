@@ -549,6 +549,10 @@ protocol TransportHostApi {
   /// native side can name the sender in background local notifications, when
   /// Dart isn't running to do it. Persisted in the App Group UserDefaults.
   func cachePeerName(identityHex: String, name: String) throws
+  /// The APNs device token (hex) once the OS has handed it to us, or null if not
+  /// yet available / push isn't provisioned. Dart registers it with the relay so
+  /// relayed messages can wake this device.
+  func pushToken() throws -> String?
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -728,6 +732,22 @@ class TransportHostApiSetup {
       }
     } else {
       cachePeerNameChannel.setMessageHandler(nil)
+    }
+    /// The APNs device token (hex) once the OS has handed it to us, or null if not
+    /// yet available / push isn't provisioned. Dart registers it with the relay so
+    /// relayed messages can wake this device.
+    let pushTokenChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.stonechat.TransportHostApi.pushToken\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      pushTokenChannel.setMessageHandler { _, reply in
+        do {
+          let result = try api.pushToken()
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      pushTokenChannel.setMessageHandler(nil)
     }
   }
 }
