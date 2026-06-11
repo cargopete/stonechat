@@ -26,6 +26,12 @@ class _CallHostState extends State<CallHost> {
   void initState() {
     super.initState();
     widget.manager.addListener(_sync);
+    // A call answered during a cold launch can already be in progress by the
+    // time this mounts — reflect that on the first frame rather than waiting
+    // for the next state change.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _sync();
+    });
   }
 
   @override

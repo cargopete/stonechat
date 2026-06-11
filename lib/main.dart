@@ -56,6 +56,12 @@ class AppBootstrap {
             sign: crypto.signAuth,
           );
     final service = ChatService(db: db, crypto: crypto, relay: relay);
+    // Build the call manager BEFORE start(): start() immediately drains (and
+    // acks) the relay inbox, so a call offer waiting on a cold launch would be
+    // emitted on the signal stream — and dropped, then deleted from the relay —
+    // before anything subscribed. Subscribing first means a callee woken by the
+    // VoIP push actually receives the offer and can answer.
+    final callManager = CallManager(service: service, db: db);
     // Never seed in a release build, even if the SEED define leaks into an
     // archive — this is purely a dev-only screenshot aid.
     const seed = !kReleaseMode && String.fromEnvironment('SEED') == 'demo';
@@ -67,7 +73,6 @@ class AppBootstrap {
       final myName = await db.getSetting('myDisplayName') ?? 'stonechat';
       await service.start(displayName: myName);
     }
-    final callManager = CallManager(service: service, db: db);
     Peer? demoPeer;
     if (seed) {
       demoPeer = await _seedDemo(db);

@@ -224,9 +224,10 @@ class CallManager extends ChangeNotifier {
         _callKitId = sig.callId;
         _startFastPoll();
         _set(CallState.incoming);
-        if (_pendingAcceptId == sig.callId) {
+        if (_pendingAcceptId == sig.callId || await _alreadyAccepted(sig.callId)) {
           // Cold launch: the user already answered the CallKit ring (from the
-          // VoIP push) before the offer finished decrypting. Accept now.
+          // VoIP push) before the offer finished decrypting — or before we were
+          // even listening for the accept event. Connect now.
           _pendingAcceptId = null;
           await acceptCall();
         } else {
@@ -295,6 +296,18 @@ class CallManager extends ChangeNotifier {
         iconName: 'CallKitLogo',
       ),
     ));
+  }
+
+  /// Whether CallKit already holds this call as accepted — covers the cold
+  /// launch where the user's "answer" tap was processed natively before the
+  /// Dart event listener existed, so we never saw the accept event.
+  Future<bool> _alreadyAccepted(String id) async {
+    try {
+      for (final c in await FlutterCallkitIncoming.activeCalls()) {
+        if (c.id == id && c.isAccepted) return true;
+      }
+    } catch (_) {}
+    return false;
   }
 
   Future<void> _onCallKitEvent(CallEvent? e) async {
