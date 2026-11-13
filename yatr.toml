@@ -1,0 +1,87 @@
+# yatr - https://github.com/cargopete/yatr
+#
+# CI calls these tasks by name, so `yatr ci` locally is the same gate.
+
+[settings]
+cache = true
+
+# Not cached: .dart_tool points into the pub cache, which yatr cannot see.
+[tasks.deps]
+desc = "Resolve packages (flutter pub get)"
+run = ["flutter pub get"]
+no_cache = true
+
+[tasks.gen-bridge]
+desc = "Regenerate the Pigeon Dart/Swift bridge"
+depends = ["deps"]
+run = ["dart run pigeon --input pigeons/transport.dart"]
+sources = ["pigeons/**", "pubspec.lock"]
+outputs = ["lib/src/transport/transport_api.g.dart", "ios/Runner/Transport/TransportApi.g.swift"]
+
+[tasks.gen-drift]
+desc = "Regenerate the drift database code"
+depends = ["deps"]
+run = ["dart run build_runner build"]
+sources = ["lib/src/data/**", "pubspec.lock"]
+outputs = ["lib/src/data/database.g.dart"]
+
+[tasks.gen]
+desc = "All generated code"
+depends = ["gen-bridge", "gen-drift"]
+run = []
+
+[tasks.fmt]
+desc = "Format lib and test"
+run = ["dart format lib test"]
+no_cache = true
+
+[tasks.analyze]
+desc = "flutter analyze (CI)"
+depends = ["deps"]
+run = ["flutter analyze"]
+sources = ["lib/**", "test/**", "pigeons/**", "pubspec.yaml", "pubspec.lock", "analysis_options.yaml"]
+
+[tasks.test]
+desc = "The Flutter test suite (CI)"
+depends = ["deps"]
+run = ["flutter test"]
+sources = ["lib/**", "test/**", "assets/**", "pubspec.yaml", "pubspec.lock"]
+
+[tasks.build-ios]
+desc = "Debug iOS build without codesigning (CI, needs Xcode)"
+depends = ["deps"]
+run = ["flutter build ios --no-codesign --debug"]
+sources = ["lib/**", "ios/**", "assets/**", "pubspec.yaml", "pubspec.lock"]
+
+[tasks.icon]
+desc = "Render assets/icon/stonechat.png from the painted mark"
+depends = ["deps"]
+env = { GEN_ICON = "1" }
+timeout = 120
+run = ["flutter test test/tools/generate_icon_test.dart"]
+sources = ["lib/**", "test/tools/generate_icon_test.dart"]
+outputs = ["assets/icon/stonechat.png"]
+
+[tasks.dev]
+desc = "Run on a device (two physical devices to see BLE)"
+depends = ["deps"]
+foreground = true
+run = ["flutter run"]
+
+[tasks.relay-lint]
+desc = "Clippy on the relay with warnings denied"
+cwd = "relay"
+run = ["cargo clippy --all-targets -- -D warnings"]
+sources = ["src/**", "Cargo.toml", "Cargo.lock"]
+
+[tasks.relay-build]
+desc = "Release build of the relay"
+cwd = "relay"
+run = ["cargo build --release"]
+sources = ["src/**", "Cargo.toml", "Cargo.lock"]
+outputs = ["target/release/stonechat-relay"]
+
+[tasks.ci]
+desc = "What the CI analyze-test job runs: analyze, test"
+depends = ["analyze", "test"]
+run = []
